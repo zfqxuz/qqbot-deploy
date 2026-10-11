@@ -1,0 +1,5 @@
+# 本机配置与备份都不入库
+.env
+.env.local
+dsh.env
+backups/

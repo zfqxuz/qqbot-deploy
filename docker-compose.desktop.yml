@@ -1,0 +1,36 @@
+# Docker Desktop（Windows / macOS）用的覆盖文件：不用 host 网络，改走 compose 桥接网络 + 端口映射。
+#
+# 什么时候需要它：
+#   - Docker Desktop 4.34 以下（没有 host networking 开关）
+#   - 或者你不想去 Settings → Resources → Network 打开 "Enable host networking"
+#   Docker Desktop 4.34+ 打开那个开关后，直接用主文件（docker-compose.yml）就行。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml up -d
+#
+# 与 host 版本的两个差异（一定要知道）：
+#   1. NapCat 的反向 WS 目标要从 ws://127.0.0.1:6700 改成 ws://harness:6700（compose 服务名）。
+#      在 NapCat WebUI 的 OneBot 配置里改，或改挂载出来的 onebot11.json 后重启 napcat。
+#   2. 控制台的端口探活改指服务名（同一个 compose 网络内可达），所以下面注入了 QQ_*_HOST；
+#      状态台里的 NapCat WebUI 链接仍然给浏览器用的 127.0.0.1:6099（端口已映射出来）。
+services:
+  napcat:
+    network_mode: !reset null
+    ports:
+      - "${QQ_NAPCAT_WEBUI_PORT:-6099}:6099"
+
+  harness:
+    network_mode: !reset null
+    ports:
+      - "${QQ_DSH_PORT:-3081}:3081"
+
+  console:
+    network_mode: !reset null
+    ports:
+      - "${QQ_CONSOLE_PORT:-8798}:8798"
+    environment:
+      # 容器名在同一个 compose 网络里可以直接当主机名
+      QQ_NAPCAT_HOST: napcat
+      QQ_BRIDGE_HOST: harness
+      QQ_DSH_HOST: harness
+      QQ_NAPCAT_WEBUI_URL_HOST: 127.0.0.1

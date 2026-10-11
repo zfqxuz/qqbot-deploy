@@ -1,0 +1,15 @@
+**/node_modules
+**/.git
+**/docs
+**/*.md.bak
+**/logs
+**/data
+**/state
+**/napcat-data
+**/napcat-config
+**/napcat-cache
+**/corpora
+**/persona
+**/.dsh
+**/*.sqlite*
+**/backups
