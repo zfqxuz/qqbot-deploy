@@ -52,6 +52,16 @@ jobs:
             fi
           done < <(find . \( -name '*.ps1' -o -name '*.iss' \) -not -path './.git/*' -print0)
           [ "$bad" = 0 ] && echo "BOM 检查通过"
+      - name: install-host.ps1 不许裸调原生命令（PS 5.1 + EAP=Stop 会把 stderr 当终止错误）
+        run: |
+          set -e
+          # 2026-10-12 真机踩到：脚本设了 $ErrorActionPreference='Stop'，git clone 把进度写进 stderr，
+          # PowerShell 5.1 把那一行当终止性错误 → clone 刚开始就中断。所有原生命令必须走 Invoke-Native。
+          if grep -nE '^[[:space:]]*&[[:space:]]*(git|winget|npm|node|schtasks)([[:space:]]|$)' host/install-host.ps1; then
+            echo "::error::host/install-host.ps1 里还有裸的原生命令调用，必须改走 Invoke-Native（见文件内注释）"
+            exit 1
+          fi
+          echo "裸调用检查通过"
       - name: Inno 快捷方式名里不许有 Windows 非法字符
         run: |
           set -e

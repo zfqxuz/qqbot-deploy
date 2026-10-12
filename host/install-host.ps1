@@ -72,6 +72,26 @@ function Test-DirExists([string]$path) {
   if (-not $path) { return $false }
   try { return [System.IO.Directory]::Exists($path) } catch { return $false }
 }
+# [fix 2026-10-12] 原生命令统一走这里，别再直接写 `& git ...`。
+#   坑：脚本开头设了 $ErrorActionPreference='Stop'，而 git 把进度写进 **stderr**（"Cloning into ..."）。
+#   PowerShell 5.1 会把原生命令的 stderr 输出当成终止性错误 → clone 刚开头脚本就中断，日志里是
+#   TerminatingError(git.exe) ... 停在 Cloning into '...'（用户 2026-10-12 真机踩到）。
+#   这里临时把偏好设回 Continue，只按退出码判断成败；输出照常打进日志。
+function Invoke-Native {
+  param([string]$Exe, [string[]]$Argv, [switch]$Quiet)
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if ($Quiet) { & $Exe @Argv 2>&1 | Out-Null }
+    else { & $Exe @Argv 2>&1 | ForEach-Object { Write-Host ([string]$_) } }
+    return $LASTEXITCODE
+  } catch {
+    Warn "$Exe 调用异常：$($_.Exception.Message)"
+    return 1
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+}
 function Find-Exe([string]$name, [string[]]$extraDirs) {
   $c = Get-Command $name -ErrorAction SilentlyContinue
   if ($c) { return $c.Source }
@@ -202,12 +222,12 @@ if (-not $nodeOk) {
   if (Get-Command winget -ErrorAction SilentlyContinue) {
     Say "node 是 $nodeV（需要 ≥22.13）→ 用 winget 装 Node LTS"
     # 先试用户作用域（不需要管理员）；Node 的 winget 包不一定支持 --scope user，失败就回退默认作用域（可能弹 UAC）
-    & winget install --id OpenJS.NodeJS.LTS --scope user --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) {
-      Warn "用户作用域安装失败（winget 退出码 $LASTEXITCODE）→ 改试默认作用域（可能弹管理员确认）"
-      & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+    $wgRc = Invoke-Native 'winget' @('install', '--id', 'OpenJS.NodeJS.LTS', '--scope', 'user', '--accept-source-agreements', '--accept-package-agreements')
+    if ($wgRc -ne 0) {
+      Warn "用户作用域安装失败（winget 退出码 $wgRc）→ 改试默认作用域（可能弹管理员确认）"
+      $wgRc = Invoke-Native 'winget' @('install', '--id', 'OpenJS.NodeJS.LTS', '--accept-source-agreements', '--accept-package-agreements')
     }
-    if ($LASTEXITCODE -eq 0) { $wingetOk = $true }
+    if ($wgRc -eq 0) { $wingetOk = $true } else { Warn "winget 两次都没成功（最后一次退出码 $wgRc）→ 改用官方 zip" }
   } else {
     Warn '这台机器上没有 winget → 改用官方 zip 安装（不需要管理员）'
   }
@@ -276,7 +296,8 @@ if ($needDsh) {
   if (-not $npmPath) { Die '没有 npm：先装好 Node ≥22.13 再重跑（见上面 node 那一节）' }
   $dshSpec = if ($DshVersion) { "@$DshVersion" } else { '' }
   Say "安装 @deepseek-ai/dsh$dshSpec（$dshWhy）"
-  & $npmPath install -g --no-fund --no-audit "@deepseek-ai/dsh$dshSpec"
+  $npmRc = Invoke-Native $npmPath @('install', '-g', '--no-fund', '--no-audit', "@deepseek-ai/dsh$dshSpec")
+  if ($npmRc -ne 0) { Die "npm 安装 dsh 失败（退出码 $npmRc），先修好网络/权限再重跑" }
   $dshCmd = Get-Command dsh -ErrorAction SilentlyContinue
   if (-not $dshCmd) { Die '装完找不到 dsh：npm 全局 bin 不在 PATH（npm prefix -g 看看，并把它的 bin 目录加进 PATH）' }
   $dshNow = ((& dsh --version) -replace '\s', '')
@@ -293,14 +314,14 @@ function Fetch-Repo($url, $dir) {
   if ($script:proxyEnv) { $gp = @('-c', "http.proxy=$script:proxyEnv", '-c', "https.proxy=$script:proxyEnv") }
   if (Test-FileExists (Join-Path $dir '.git')) {
     Say "更新 $dir"
-    & git -C $dir @gp pull --ff-only
-    if ($LASTEXITCODE -ne 0) { Warn "更新失败：$dir（网络问题或本地有改动）" }
+    $rc = Invoke-Native 'git' (@('-C', $dir) + $gp + @('pull', '--ff-only'))
+    if ($rc -ne 0) { Warn "更新失败：$dir（网络问题或本地有改动）" }
     return
   }
   if (Get-Command git -ErrorAction SilentlyContinue) {
     Say "clone $url"
-    & git @gp clone --depth 1 $url $dir
-    if ($LASTEXITCODE -ne 0) {
+    $rc = Invoke-Native 'git' ($gp + @('clone', '--depth', '1', $url, $dir))
+    if ($rc -ne 0) {
       Warn "git clone 失败：$url"
       Warn '  连不上 GitHub 的话，配一次代理再重跑（端口换成你自己的）：'
       Warn '    git config --global http.proxy http://127.0.0.1:7890'
@@ -338,7 +359,7 @@ Say '  桥接 junction 完成'
 
 # 5) 首启播种（只补缺、不覆盖）
 $seed = Join-Path $BridgeDir 'control\bin\qq-seed.mjs'
-if (Test-Path $seed) { Say '首启播种（只补缺、不覆盖已有配置）'; & node $seed }
+if (Test-Path $seed) { Say '首启播种（只补缺、不覆盖已有配置）'; $null = Invoke-Native $nodePath @($seed) }
 
 # 6) 环境变量（用户级，重开终端生效）
 Say '写用户环境变量'
@@ -368,7 +389,7 @@ cd /d "$Workspace"
 "$nodePath" "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh) { (Get-Command dsh).Source } else { 'dsh' })" web --no-open --port $Port
 "@ | Set-Content -Encoding ASCII $runner
   Say "写启动器 $runner"
-  schtasks /Create /TN 'qqbot-dsh-web' /SC ONLOGON /TR "cmd /c \"$runner\"" /F | Out-Null
+  $null = Invoke-Native 'schtasks' @('/Create', '/TN', 'qqbot-dsh-web', '/SC', 'ONLOGON', '/TR', "cmd /c \"$runner\"", '/F') -Quiet
   Say '计划任务 qqbot-dsh-web 已创建（登录时自动起）'
 
   # 控制台（127.0.0.1:8798）：Docker 里它是独立容器、Linux 是 systemd 单元，Windows 原先漏了这个入口 ——
@@ -384,14 +405,14 @@ cd /d "$Workspace"
 "$nodePath" "$consoleJs" --port $ConsolePort --data-root "$DataRoot"
 "@ | Set-Content -Encoding ASCII $consoleRunner
     Say "写控制台启动器 $consoleRunner"
-    schtasks /Create /TN 'qqbot-console' /SC ONLOGON /TR "cmd /c \"$consoleRunner\"" /F | Out-Null
+    $null = Invoke-Native 'schtasks' @('/Create', '/TN', 'qqbot-console', '/SC', 'ONLOGON', '/TR', "cmd /c \"$consoleRunner\"", '/F') -Quiet
     Say '计划任务 qqbot-console 已创建（登录时自动起）'
   } else {
     Warn "找不到 $consoleJs：跳过控制台自启（控制台可手工跑）"
   }
 
   # 立刻跑一次这两个任务，并等端口真的起来 —— 安装器就是等这里跑完才去开浏览器
-  foreach ($tn in @('qqbot-dsh-web', 'qqbot-console')) { schtasks /Run /TN $tn 2>$null | Out-Null }
+  foreach ($tn in @('qqbot-dsh-web', 'qqbot-console')) { $null = Invoke-Native 'schtasks' @('/Run', '/TN', $tn) -Quiet }
   Say '已触发启动，等端口就绪（最多 90 秒）…'
   $deadline = (Get-Date).AddSeconds(90)
   $ready = $false
