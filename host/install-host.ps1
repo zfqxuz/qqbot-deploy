@@ -148,19 +148,46 @@ function Resolve-NodeState {
   }
 }
 if (-not $nodeOk) {
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-    Die "node 是 $nodeV（需要 ≥22.13），而这台机器上没有 winget。两条路：
-      1) 去 https://nodejs.org 下 LTS 的 .msi 装上（安装时勾 Add to PATH），再重跑本脚本
-      2) 从 Microsoft Store 装「应用安装程序」拿到 winget，再重跑本脚本"
+  # 兜底：不依赖 winget、也不需要管理员 —— 下官方 zip 解到 %LOCALAPPDATA%\Programs\nodejs
+  function Install-NodeFromZip {
+    $ver = if ($env:QQ_NODE_VERSION) { $env:QQ_NODE_VERSION } else { 'v22.14.0' }
+    $mirror = if ($env:QQ_NODE_MIRROR) { $env:QQ_NODE_MIRROR.TrimEnd('/') } else { 'https://nodejs.org/dist' }
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+    $url = "$mirror/$ver/node-$ver-win-$arch.zip"
+    $zip = Join-Path $env:TEMP "node-$ver-win-$arch.zip"
+    $dest = Join-Path $env:LOCALAPPDATA 'Programs\nodejs'
+    Say "下载 $url"
+    try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip } catch { Warn "下载失败：$($_.Exception.Message)"; return $false }
+    $tmp = Join-Path $env:TEMP ('node-unzip-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+      Expand-Archive -Path $zip -DestinationPath $tmp -Force
+      $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
+      if (-not $inner) { Warn '解压结果不对（没有顶层目录）'; return $false }
+      if (Test-DirExists $dest) { Remove-Item -Recurse -Force $dest }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+      Move-Item $inner.FullName $dest
+    } catch { Warn "解压/安装失败：$($_.Exception.Message)"; return $false }
+    finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue; Remove-Item -Force $zip -ErrorAction SilentlyContinue }
+    Say "Node 已解到 $dest"
+    return $true
   }
-  Say "node 是 $nodeV（需要 ≥22.13）→ 用 winget 装 Node LTS"
-  # 先试用户作用域（不需要管理员）；Node 的 winget 包不一定支持 --scope user，失败就回退默认作用域（可能弹 UAC）
-  & winget install --id OpenJS.NodeJS.LTS --scope user --accept-source-agreements --accept-package-agreements
-  if ($LASTEXITCODE -ne 0) {
-    Warn "用户作用域安装失败（winget 退出码 $LASTEXITCODE）→ 改试默认作用域（可能弹管理员确认）"
-    & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+
+  $wingetOk = $false
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Say "node 是 $nodeV（需要 ≥22.13）→ 用 winget 装 Node LTS"
+    # 先试用户作用域（不需要管理员）；Node 的 winget 包不一定支持 --scope user，失败就回退默认作用域（可能弹 UAC）
+    & winget install --id OpenJS.NodeJS.LTS --scope user --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) {
+      Warn "用户作用域安装失败（winget 退出码 $LASTEXITCODE）→ 改试默认作用域（可能弹管理员确认）"
+      & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+    }
+    if ($LASTEXITCODE -eq 0) { $wingetOk = $true }
+  } else {
+    Warn '这台机器上没有 winget → 改用官方 zip 安装（不需要管理员）'
   }
-  # 新装的 Node 目录可能排在旧 v16 后面 → 显式前置，再重新解析
+  if (-not $wingetOk) { [void](Install-NodeFromZip) }
+
+  # 新装的 Node 目录可能排在旧版后面 → 显式前置，再重新解析
   $freshDirs = Get-ExistingDirs @(
     (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
     (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
@@ -172,11 +199,15 @@ if (-not $nodeOk) {
     Die "装完 node 还是 $nodeV（需要 ≥22.13）。多半是旧 Node 排在 PATH 前面：
       · 现在用的是 $nodePath
       · 把上面那个目录从用户/系统 PATH 里删掉，或先卸载旧版 Node，然后重跑本脚本
-      · 验证：新开一个 PowerShell，node -v 应该 ≥ v22.13"
+      · 验证：新开一个 PowerShell，node -v 应该 ≥ v22.13
+      · 也可以自己设镜像再跑：QQ_NODE_MIRROR=https://npmmirror.com/mirrors/node"
   }
-  Say "node 就绪：$nodeV（$nodePath）"
 }
 
+# 1.6) 代理：环境里有 HTTPS_PROXY 就自动给 git 用（不写进你的全局配置，只在本次命令上加 -c）
+$script:proxyEnv = ''
+if ($env:HTTPS_PROXY) { $script:proxyEnv = $env:HTTPS_PROXY } elseif ($env:HTTP_PROXY) { $script:proxyEnv = $env:HTTP_PROXY }
+if ($script:proxyEnv) { Say "检测到代理，git 会走它：$script:proxyEnv" }
 # 1.5) 把 npm 全局 bin 目录前置：`npm i -g` 装的 dsh 落在那里，本会话的 PATH 里可能还没有
 if ($npmPath) {
   try {
@@ -225,8 +256,27 @@ if (-not (Test-DshVerOk $dshNow)) {
 
 # 3) 源码（没有 git 就用 codeload 下 zip 解压）
 function Fetch-Repo($url, $dir) {
-  if (Test-Path (Join-Path $dir '.git')) { Say "更新 $dir"; & git -C $dir pull --ff-only; return }
-  if (Get-Command git -ErrorAction SilentlyContinue) { Say "clone $url"; & git clone --depth 1 $url $dir; return }
+  $gp = @()
+  if ($script:proxyEnv) { $gp = @('-c', "http.proxy=$script:proxyEnv", '-c', "https.proxy=$script:proxyEnv") }
+  if (Test-FileExists (Join-Path $dir '.git')) {
+    Say "更新 $dir"
+    & git -C $dir @gp pull --ff-only
+    if ($LASTEXITCODE -ne 0) { Warn "更新失败：$dir（网络问题或本地有改动）" }
+    return
+  }
+  if (Get-Command git -ErrorAction SilentlyContinue) {
+    Say "clone $url"
+    & git @gp clone --depth 1 $url $dir
+    if ($LASTEXITCODE -ne 0) {
+      Warn "git clone 失败：$url"
+      Warn '  连不上 GitHub 的话，配一次代理再重跑（端口换成你自己的）：'
+      Warn '    git config --global http.proxy http://127.0.0.1:7890'
+      Warn '    git config --global https.proxy http://127.0.0.1:7890'
+      Warn '  （环境变量 HTTPS_PROXY 已有的话，本脚本会自动用它）'
+      return
+    }
+    return
+  }
   Warn "没有 git：改用 zip 下载 $url"
   $zip = Join-Path $env:TEMP ((Split-Path $url -Leaf) + '.zip')
   $name = (Split-Path $url -Leaf) -replace '\.git$',''
