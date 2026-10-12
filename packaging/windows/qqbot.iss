@@ -1,17 +1,21 @@
-﻿; ============================================================
+; ============================================================
 ;  qqbot.iss —— Windows 安装器（Inno Setup 6）
 ;
-;  它装的是"安装器"本身，不是机器人本体：
-;    {app}\…            部署包（脚本、compose、文档、一行安装入口）
-;    开始菜单           "安装 QQ 机器人（不用 Docker）" → 跑 host\install-host.ps1
-;                       "查看安装说明" / "查看更新与卸载"
-;  装的时候不会起服务、不碰数据、不需要管理员权限（PrivilegesRequired=lowest，装到用户目录）。
-;  向导走完会**自动**在一个控制台窗口里继续安装（不再需要去开始菜单点第二次）；
-;  那个窗口会把过程写在屏幕上并停住等你按回车，报错也会留在 %USERPROFILE%\qqbot\install-log-*.txt。
+;  设计目标：**双击就是安装，没有第二步**。
+;    向导（目录 + QQ 号，都能直接用默认）→ 拷贝部署包 → 向导里**等**宿主安装脚本跑完
+;    （装 Node / dsh、接插件、注册开机自启；过程日志实时写文件）→ 完成页显示结果 →
+;    自动用浏览器打开控制台 http://127.0.0.1:8798/
+;
+;  为什么不是"开始菜单里再点一下"：那等于把一次安装拆成两步，用户会以为装完了却没装。
+;  失败不吞掉：完成页写清退出码 + 完整日志路径，开始菜单里另留"重新安装或修复"。
+;  静默安装（/VERYSILENT，CI 冒烟测试用）跳过安装脚本，只做"放文件 + 建快捷方式"。
+;
+;  不需要管理员：PrivilegesRequired=lowest，装到 %LOCALAPPDATA%\Programs\QQBot；
+;  数据在 %USERPROFILE%\qqbot 与 %USERPROFILE%\.dsh —— 卸载器不碰数据。
 ;
 ;  构建（CI 里做，本机没 Windows 也能写）：
 ;    1) 把 deploy/qqbot 的内容拷到本目录的 payload\ 下
-;    2) ISCC.exe qqbot.iss /DAppVersion=0.7.3
+;    2) ISCC.exe qqbot.iss /DAppVersion=0.7.5
 ;  产物：qqbot-deploy-<版本>-setup.exe（未签名 → 首次运行会有 SmartScreen 提示）
 ; ============================================================
 
@@ -22,6 +26,7 @@
 #define AppPublisher "zfqxuz"
 #define AppURL "https://github.com/zfqxuz/qqbot-deploy"
 #define PayloadDir "payload"
+#define ConsoleURL "http://127.0.0.1:8798/"
 
 [Setup]
 AppId={{8E1F3C42-6B7A-4E6D-9F21-QQBOTDEPLOY01}
@@ -58,32 +63,16 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-; 主入口：直接跑宿主安装器（分层判断，已有 Node/dsh 不动）；不开控制台向导是为了不依赖 WSL
-Name: "{group}\重新安装或修复（不用 Docker）"; Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"""; \
-  WorkingDir: "{app}"
-Name: "{group}\先体检（什么都不改）"; Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"" -Check"; WorkingDir: "{app}"
+; 装完之后用得着的入口（安装本身已经在向导里做完了，不需要再点一次）
+Name: "{group}\打开控制台（网页）"; Filename: "{#ConsoleURL}"
 Name: "{group}\更新"; Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\update-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\重新安装或修复"; Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"""; WorkingDir: "{app}"
 Name: "{group}\卸载（保留数据）"; Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\uninstall-host.ps1"""; WorkingDir: "{app}"
 Name: "{group}\安装说明（HOST-INSTALL.md）"; Filename: "{app}\HOST-INSTALL.md"
 Name: "{group}\更新与卸载（UPDATE-UNINSTALL.md）"; Filename: "{app}\UPDATE-UNINSTALL.md"
-
-[Run]
-; ---- 主流程：向导一结束就**自动**开始安装（不是复选框，不需要再去开始菜单）----
-;      安装脚本自己会：刷新 PATH（捡起刚装好的 Node/dsh）、分层安装、全程记日志、
-;      结束/报错都停住等回车 —— 窗口不会一闪而过。
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1""{code:GetQQArg}"; \
-  WorkingDir: "{app}"; StatusMsg: "正在安装…"; \
-  Flags: runascurrentuser nowait skipifsilent
-
-; ---- 可选：装完再跑一次只读体检（默认不勾；排查问题用）----
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"" -Check"; \
-  Description: "安装后做一次环境检查"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
 ; 只删程序目录；数据在 %USERPROFILE%\qqbot 与 %USERPROFILE%\.dsh，卸载器不碰
@@ -92,7 +81,7 @@ Type: filesandordirs; Name: "{app}\build-context"
 [Messages]
 ; 只留事实：装什么 / 装哪 / 进度 / 完成。解释性句子全部去掉（标准对话框的也覆盖掉）。
 chinese.WelcomeLabel1=安装 %1
-chinese.WelcomeLabel2=结束后自动开始安装。
+chinese.WelcomeLabel2=结束后会自动安装并打开控制台。
 chinese.SelectDirLabel3=安装到：
 chinese.SelectDirBrowseLabel=
 chinese.ReadyLabel1=可以安装了。
@@ -106,8 +95,12 @@ chinese.SetupAppRunningError=请先关闭正在运行的安装程序，然后点
 [Code]
 var
   QQPage: TInputQueryWizardPage;
+  InstallLog: String;
+  InstallRc: Integer;
+  InstallTried: Boolean;
+  ConsoleOpened: Boolean;
 
-{ 注意：Inno 的 Pascal 是"先声明后使用"，这个函数必须在 NextButtonClick 之前 }
+{ Inno 的 Pascal 是"先声明后使用" }
 function IsDigitsOnly(const S: String): Boolean;
 var
   i: Integer;
@@ -121,18 +114,74 @@ begin
     end;
 end;
 
-procedure InitializeWizard;
+{ 单引号包一层：脚本路径/日志路径都可能带空格 }
+function Q(const S: String): String;
 begin
-  QQPage := CreateInputQueryPage(wpSelectDir, '机器人 QQ 号', '', '');
-  QQPage.Add('QQ 号（可留空）', False);
+  Result := '''' + S + '''';
 end;
 
-function GetQQArg(Param: String): String;
+function PowerShellExe: String;
 begin
-  if Trim(QQPage.Values[0]) <> '' then
-    Result := ' -QQ ' + Trim(QQPage.Values[0])
-  else
-    Result := '';
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(Result) then
+    Result := 'powershell.exe';
+end;
+
+{ 日志最后几行：失败时直接显示在完成页，不用用户去翻文件 }
+function LogTail: String;
+var
+  Lines: TArrayOfString;
+  i, From: Integer;
+begin
+  Result := '';
+  if (InstallLog = '') or (not FileExists(InstallLog)) then
+    Exit;
+  if not LoadStringsFromFile(InstallLog, Lines) then
+    Exit;
+  From := Length(Lines) - 12;
+  if From < 0 then
+    From := 0;
+  for i := From to Length(Lines) - 1 do
+    Result := Result + Lines[i] + #13#10;
+end;
+
+{ 真正的安装：跑宿主安装脚本，等在它上面，输出重定向进日志 }
+procedure RunHostInstall;
+var
+  Params, QQ: String;
+  Rc: Integer;
+begin
+  InstallLog := ExpandConstant('{userprofile}\qqbot\install-gui-' +
+    GetDateTimeString('yyyymmdd-hhnnss', '-', ':') + '.txt');
+  QQ := Trim(QQPage.Values[0]);
+  Params := '-NoProfile -ExecutionPolicy Bypass -Command "& ' +
+    Q(ExpandConstant('{app}\host\install-host.ps1')) + ' -NoPause';
+  if QQ <> '' then
+    Params := Params + ' -QQ ' + QQ;
+  Params := Params + ' *> ' + Q(InstallLog) + '"';
+
+  WizardForm.StatusLabel.Caption := '正在安装（Node / dsh / 插件 / 开机自启，可能要几分钟）…';
+  WizardForm.ProgressGauge.Style := npbstMarquee;
+  if not Exec(PowerShellExe, Params, ExpandConstant('{app}'), SW_HIDE,
+              ewWaitUntilTerminated, Rc) then
+    Rc := -1;
+  WizardForm.ProgressGauge.Style := npbstNormal;
+  InstallRc := Rc;
+  InstallTried := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { 静默安装（CI 冒烟测试）不跑这一步：不做重活、不开浏览器 }
+  if (CurStep = ssPostInstall) and (not WizardSilent) and (not InstallTried) then
+    RunHostInstall;
+end;
+
+procedure InitializeWizard;
+begin
+  QQPage := CreateInputQueryPage(wpSelectDir, '机器人 QQ 号', '',
+    '留空也行：装完在控制台里再填。');
+  QQPage.Add('QQ 号（可留空）', False);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -148,5 +197,32 @@ begin
       MsgBox('QQ 号必须是纯数字（例如 123456789），或者留空。', mbError, MB_OK);
       Result := False;
     end;
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  ErrCode: Integer;
+begin
+  if (CurPageID <> wpFinished) or (not InstallTried) then
+    Exit;
+  if InstallRc = 0 then
+  begin
+    WizardForm.FinishedLabel.Caption :=
+      '安装完成。控制台已经用浏览器打开了（' + '{#ConsoleURL}' + '），' +
+      '在里面扫码登录 QQ 就能用。' + #13#10 + #13#10 +
+      '过程日志：' + InstallLog;
+    if not ConsoleOpened then
+    begin
+      ShellExec('open', '{#ConsoleURL}', '', '', SW_SHOWNORMAL, ewNoWait, ErrCode);
+      ConsoleOpened := True;
+    end;
+  end
+  else
+  begin
+    WizardForm.FinishedLabel.Caption :=
+      '安装脚本报错了（退出码 ' + IntToStr(InstallRc) + '）。' + #13#10 +
+      '完整日志：' + InstallLog + #13#10 + #13#10 +
+      '日志最后几行：' + #13#10 + LogTail;
   end;
 end;

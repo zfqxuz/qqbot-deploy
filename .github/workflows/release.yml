@@ -5,7 +5,7 @@
 #  产物挂到本仓库的 Release 上，用户即可下载：
 #    qqbot-deploy_<版本>_all.deb      Debian/Ubuntu：dpkg -i，然后 qqbot-install
 #    qqbot-deploy-<版本>-1.*.noarch.rpm  Fedora/RHEL：rpm -i，然后 qqbot-install
-#    qqbot-deploy-<版本>-setup.exe    Windows：双击安装 → 开始菜单"安装 QQ 机器人"
+#    qqbot-deploy-<版本>-setup.exe    Windows：双击 → 自动装完并打开控制台（没有第二步）
 #    qqbot-deploy-<版本>.pkg          macOS：installer -pkg … ，然后 qqbot-install
 #
 #  这些安装包只放文件、不起服务、不碰数据（包管理器只负责放文件，安装由用户显式发起）。
@@ -230,7 +230,7 @@ jobs:
 
             - **Debian/Ubuntu**：`sudo dpkg -i qqbot-deploy_*_all.deb` → `qqbot-install`
             - **Fedora/RHEL**：`sudo rpm -i qqbot-deploy-*.rpm` → `qqbot-install`
-            - **Windows**：双击 `qqbot-deploy-*-setup.exe` → 开始菜单「安装 QQ 机器人（不用 Docker）」
+            - **Windows**：双击 `qqbot-deploy-*-setup.exe`（填 QQ 号，可留空）→ 自动装完、自动打开控制台，没有第二步
             - **macOS**：`sudo installer -pkg qqbot-deploy-*.pkg -target /` → `qqbot-install`
 
             更新 / 卸载：`qqbot-update` / `qqbot-uninstall`（默认保留数据）。

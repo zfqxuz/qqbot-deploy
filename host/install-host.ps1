@@ -324,7 +324,7 @@ $runnerSrc = Join-Path $PSScriptRoot '..\dsh-web-run.mjs'
 if (Test-Path $runnerSrc) { Copy-Item $runnerSrc $runnerJs -Force; Say "装 dsh 启动器 → $runnerJs" }
 else { Warn "没找到 $runnerSrc：跳过启动器（控制台改用环境变量找端口）" }
 
-# 8) 开机自启：计划任务，登录时起一个后台窗口跑 dsh web
+# 8) 开机自启：两个计划任务（dsh web + 控制台），并且**立刻起来**（不等下次登录）
 if (-not $NoAutostart) {
   $runner = Join-Path $DataRoot 'start-dsh.cmd'
   @"
@@ -336,7 +336,41 @@ node "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh)
 "@ | Set-Content -Encoding ASCII $runner
   Say "写启动器 $runner"
   schtasks /Create /TN 'qqbot-dsh-web' /SC ONLOGON /TR "cmd /c \"$runner\"" /F | Out-Null
-  Say '计划任务 qqbot-dsh-web 已创建（登录时自动起；立即跑一次：schtasks /Run /TN qqbot-dsh-web）'
+  Say '计划任务 qqbot-dsh-web 已创建（登录时自动起）'
+
+  # 控制台（127.0.0.1:8798）：Docker 里它是独立容器、Linux 是 systemd 单元，Windows 原先漏了这个入口 ——
+  # 装完打不开控制台（2026-10-12 补）。跟 dsh web 一样注册一个登录自启任务。
+  $consoleJs = Join-Path $BridgeDir 'control\bin\qq-acl-console.mjs'
+  if (Test-Path $consoleJs) {
+    $consoleRunner = Join-Path $DataRoot 'start-console.cmd'
+    @"
+@echo off
+set QQ_DATA_ROOT=$DataRoot
+set DSH_HOME=$DshHome
+cd /d "$Workspace"
+node "$consoleJs" --port $ConsolePort --data-root "$DataRoot"
+"@ | Set-Content -Encoding ASCII $consoleRunner
+    Say "写控制台启动器 $consoleRunner"
+    schtasks /Create /TN 'qqbot-console' /SC ONLOGON /TR "cmd /c \"$consoleRunner\"" /F | Out-Null
+    Say '计划任务 qqbot-console 已创建（登录时自动起）'
+  } else {
+    Warn "找不到 $consoleJs：跳过控制台自启（控制台可手工跑）"
+  }
+
+  # 立刻跑一次这两个任务，并等端口真的起来 —— 安装器就是等这里跑完才去开浏览器
+  foreach ($tn in @('qqbot-dsh-web', 'qqbot-console')) { schtasks /Run /TN $tn 2>$null | Out-Null }
+  Say '已触发启动，等端口就绪（最多 90 秒）…'
+  $deadline = (Get-Date).AddSeconds(90)
+  $ready = $false
+  while ((Get-Date) -lt $deadline) {
+    $okDsh = $false; $okConsole = $false
+    try { $okDsh = (New-Object Net.Sockets.TcpClient).ConnectAsync('127.0.0.1', $Port).Wait(800) } catch { }
+    try { $okConsole = (New-Object Net.Sockets.TcpClient).ConnectAsync('127.0.0.1', $ConsolePort).Wait(800) } catch { }
+    if ($okDsh -and $okConsole) { $ready = $true; break }
+    Start-Sleep -Milliseconds 1000
+  }
+  if ($ready) { Say "宿主与控制台已就绪：http://127.0.0.1:$ConsolePort/" }
+  else { Warn "等了 90 秒还没就绪（$Port / $ConsolePort）：看计划任务 qqbot-dsh-web、qqbot-console 的输出；修完可重跑本脚本" }
 } else { Warn '按参数跳过自启' }
 
 Write-Host ''
