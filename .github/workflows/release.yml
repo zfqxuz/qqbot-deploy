@@ -67,6 +67,24 @@ jobs:
             esac
           done < packaging/windows/qqbot.iss
           [ "$bad" = 0 ] && echo "快捷方式名检查通过"
+      - name: windows job 的步骤脚本必须纯 ASCII
+        run: |
+          python3 - <<'PYEOF'
+          import yaml, sys
+          d = yaml.safe_load(open('.github/workflows/release.yml'))
+          bad = []
+          for st in d['jobs']['windows'].get('steps', []):
+              run = st.get('run') or ''
+              # 只看 shell: powershell 的（写进临时 .ps1 由 Windows PowerShell 5.1 读，非 ASCII 会乱码）
+              if (st.get('shell') or 'pwsh') == 'powershell':
+                  for i, line in enumerate(run.split('\n'), 1):
+                      if any(ord(c) > 127 for c in line):
+                          bad.append(f"{st.get('name')} 第{i}行: {line.strip()[:60]}")
+          if bad:
+              print('::error::windows job 的 run 脚本含非 ASCII 字符（Windows PowerShell 5.1 会乱码）')
+              print('\n'.join(bad)); sys.exit(1)
+          print('windows run 脚本 ASCII 检查通过')
+          PYEOF
       - name: 所有 mjs 脚本语法检查
         run: |
           set -e
@@ -118,8 +136,8 @@ jobs:
             $errs = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
             if ($errs -and $errs.Count -gt 0) {
-              Write-Host "::error file=$($_.FullName)::PowerShell 5.1 解析失败"
-              $errs | ForEach-Object { Write-Host ("  行{0} 列{1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message) }
+              Write-Host "::error file=$($_.FullName)::PowerShell 5.1 parse failed"
+              $errs | ForEach-Object { Write-Host ("  line {0} col {1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message) }
               $bad = 1
             } else { Write-Host "parse OK (PS 5.1): $($_.Name)" }
           }
@@ -130,8 +148,8 @@ jobs:
         run: |
           try {
             Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation/main/ChineseSimplified.isl' -OutFile 'packaging\windows\ChineseSimplified.isl'
-            Write-Host '中文语言包已就位'
-          } catch { Write-Host "取中文语言包失败（将使用英文对话框）：$($_.Exception.Message)" }
+            Write-Host 'Chinese language file ready'
+          } catch { Write-Host "Chinese language file unavailable, using English dialogs: $($_.Exception.Message)" }
       - name: 装 Inno Setup 6
         shell: pwsh
         run: choco install innosetup -y --no-progress
@@ -148,10 +166,10 @@ jobs:
       - name: 真跑一次 -Check（只读；复现用户实际执行路径，抓运行时错误）
         shell: powershell
         run: |
-          Write-Host '--- 直接用仓库里的脚本 ---'
+          Write-Host '--- run install-host.ps1 -Check (repo copy) ---'
           powershell -NoProfile -ExecutionPolicy Bypass -File .\host\install-host.ps1 -Check -NoPause
-          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { Write-Host "::error::install-host.ps1 -Check 退出码 $LASTEXITCODE"; exit 1 }
-          Write-Host '--- 再走一遍用户的一行安装（从已发布仓库取包）---'
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { Write-Host "::error::install-host.ps1 -Check exit code $LASTEXITCODE"; exit 1 }
+          Write-Host '--- run the published one-liner (get-qqbot.ps1 -Check) ---'
           Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/zfqxuz/qqbot-deploy/main/host/get-qqbot.ps1' -OutFile "$env:TEMP\get-qqbot.ps1"
           powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\get-qqbot.ps1" -Check -NoPause
       - name: 冒烟测试：静默装一遍再卸掉（抓"只有安装时才暴露"的错）
@@ -159,12 +177,12 @@ jobs:
         run: |
           $exe = (Get-ChildItem dist\*.exe | Select-Object -First 1).FullName
           $dir = Join-Path $env:RUNNER_TEMP 'qqbot-smoke'
-          Write-Host "安装到 $dir"
+          Write-Host "installing to $dir"
           $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir")
-          Write-Host "安装器退出码：$($p.ExitCode)"
+          Write-Host "installer exit code: $($p.ExitCode)"
           foreach ($f in @('host\install-host.ps1','host\uninstall-host.ps1','update.sh','UPDATE-UNINSTALL.md')) {
             if (-not (Test-Path (Join-Path $dir $f))) { Write-Host "::error::安装后缺少 $f"; exit 1 }
-            Write-Host "在：$f"
+            Write-Host "found: $f"
           }
           # 开始菜单快捷方式（这一步以前炸过：名字里带 "/" → 0x80070003）
           $lnk = Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*重新安装*' }
@@ -172,7 +190,7 @@ jobs:
           Write-Host "快捷方式：$($lnk.FullName)"
           $un = Join-Path $dir 'unins000.exe'
           if (Test-Path $un) { Start-Process -Wait -FilePath $un -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') }
-          Write-Host '冒烟测试通过'
+          Write-Host 'smoke test passed'
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
