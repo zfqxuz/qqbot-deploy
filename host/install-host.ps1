@@ -1,12 +1,17 @@
 # install-host.ps1 —— Windows 上的"不用 Docker"安装
 #
-# 做什么：装 Node（缺则用 winget）→ npm 装 dsh → 拉桥接/插件源码 → 用 junction 接进 DSH home
+# 做什么：按分层装 Node（缺则用 winget）→ 按分层装 dsh → 拉桥接/插件源码 → 用 junction 接进 DSH home
 #         → 写环境变量 → 建开机自启的计划任务 → 打印 NapCat 官方安装步骤与验证命令
+#
+# 分层：已有的东西一律不动 —— 有 Node 不装 Node，有 dsh 不装 dsh（要升级显式加 -UpgradeDsh）
 #
 # 用法（管理员或普通用户都可以，尽量不要求管理员）：
 #   powershell -ExecutionPolicy Bypass -File install-host.ps1
 #   powershell -ExecutionPolicy Bypass -File install-host.ps1 -Check
 #   powershell -ExecutionPolicy Bypass -File install-host.ps1 -QQ 2267595782 -Port 3081
+#   powershell -ExecutionPolicy Bypass -File install-host.ps1 -UpgradeDsh
+#   powershell -ExecutionPolicy Bypass -File install-host.ps1 -DshVersion 0.2.0-rc.2
+#   powershell -ExecutionPolicy Bypass -File install-host.ps1 -SkipDsh
 #
 # 说明：本脚本在 Linux 上写的、没有 Windows 机器实测过；每一步都有验证命令，
 #       失败就停在那一步并把命令打出来（详见同目录 HOST-INSTALL.md 第 3 节）。
@@ -16,7 +21,10 @@ param(
   [int]$ConsolePort = 8798,
   [string]$DataRoot = "$env:USERPROFILE\qqbot",
   [switch]$Check,
-  [switch]$NoAutostart
+  [switch]$NoAutostart,
+  [switch]$UpgradeDsh,
+  [switch]$SkipDsh,
+  [string]$DshVersion = ''
 )
 $ErrorActionPreference = 'Stop'
 function Say($m)  { Write-Host "[host] $m" }
@@ -38,11 +46,12 @@ $node = Get-Command node -ErrorAction SilentlyContinue
 $npm  = Get-Command npm  -ErrorAction SilentlyContinue
 $git  = Get-Command git  -ErrorAction SilentlyContinue
 $nodeV = if ($node) { (& node -v) } else { '无' }
+# [fix 2026-10-12] 门槛是 ≥22.13：插件静态 import 'node:sqlite'（20.x 直接抛错，22.5~22.12 要 flag）
 $nodeOk = $false
-if ($nodeV -match '^v(\d+)') { $nodeOk = [int]$Matches[1] -ge 20 }
-Write-Host ("  node           : {0} {1}" -f $nodeV, $(if ($nodeOk) { '（≥20 够用）' } else { '（缺/太旧 → 用 winget 装）' }))
+if ($nodeV -match '^v(\d+)\.(\d+)') { $nodeOk = ([int]$Matches[1] -gt 22) -or ([int]$Matches[1] -eq 22 -and [int]$Matches[2] -ge 13) }
+Write-Host ("  node           : {0} {1}" -f $nodeV, $(if ($nodeOk) { '（≥22.13 够用）' } else { '（缺/太旧：需要 ≥22.13 → 用 winget 装）' }))
 Write-Host ("  npm / git      : {0} / {1}" -f [bool]$npm, [bool]$git)
-Write-Host ("  dsh            : {0}" -f $(if (Get-Command dsh -ErrorAction SilentlyContinue) { (& dsh --version) } else { '没有' }))
+Write-Host ("  dsh            : {0}" -f $(if (Get-Command dsh -ErrorAction SilentlyContinue) { "$(& dsh --version)（在，默认不动）" } else { '没有 → 会装' }))
 Write-Host ("  DSH home       : {0}" -f $DshHome)
 Write-Host ("  数据根/工作区  : {0} / {1}" -f $DataRoot, $Workspace)
 $p6700 = (Get-NetTCPConnection -LocalPort 6700 -ErrorAction SilentlyContinue)
@@ -62,11 +71,40 @@ if (-not $nodeOk) {
   }
 }
 
-# 2) dsh
-Say '安装/升级 dsh（npm -g）'
-& npm install -g --no-fund --no-audit '@deepseek-ai/dsh'
-if (-not (Get-Command dsh -ErrorAction SilentlyContinue)) { Die '装完找不到 dsh：npm 全局 bin 不在 PATH（npm prefix -g 看看，并把它的 bin 目录加进 PATH）' }
-Say ("dsh 版本：" + (& dsh --version))
+# 2) dsh（分层：有就不动，缺才装，点名才换）
+# 与 Node 一个原则：不擅自升级用户机器上已有的 dsh。
+# 插件声明的兼容范围是 0.1.x / 0.2.x（见 package.json 的 peerDependencies）。
+function Test-DshVerOk($v) { return ($v -match '^0\.(1|2)\.') }
+$dshCmd = Get-Command dsh -ErrorAction SilentlyContinue
+$dshNow = if ($dshCmd) { ((& dsh --version) -replace '\s', '') } else { '' }
+$needDsh = $false; $dshWhy = ''
+if ($SkipDsh) {
+  if (-not $dshCmd) { Die '-SkipDsh 但机器上没有 dsh（想让脚本装就别加这个参数）' }
+  $dshWhy = '按 -SkipDsh 不动它'
+} elseif ($DshVersion -ne '') {
+  if ($dshNow -eq $DshVersion -or $dshNow -eq $DshVersion.TrimStart('v')) { $dshWhy = "已经是要的版本 $dshNow，跳过" }
+  else { $needDsh = $true; $dshWhy = "按 -DshVersion $DshVersion 安装（现有：$(if ($dshNow) { $dshNow } else { '无' })）" }
+} elseif ($UpgradeDsh) {
+  $needDsh = $true; $dshWhy = "按 -UpgradeDsh 升级（现有：$(if ($dshNow) { $dshNow } else { '无' })）"
+} elseif (-not $dshCmd) {
+  $needDsh = $true; $dshWhy = '机器上没有 dsh，装一个'
+} else {
+  $dshWhy = "已有 dsh $dshNow，跳过（要升级：-UpgradeDsh）"
+}
+if ($needDsh) {
+  if (-not $npm) { Die '没有 npm：先装好 Node ≥20 再重跑' }
+  $dshSpec = if ($DshVersion) { "@$DshVersion" } else { '' }
+  Say "安装 @deepseek-ai/dsh$dshSpec（$dshWhy）"
+  & npm install -g --no-fund --no-audit "@deepseek-ai/dsh$dshSpec"
+  $dshCmd = Get-Command dsh -ErrorAction SilentlyContinue
+  if (-not $dshCmd) { Die '装完找不到 dsh：npm 全局 bin 不在 PATH（npm prefix -g 看看，并把它的 bin 目录加进 PATH）' }
+  $dshNow = ((& dsh --version) -replace '\s', '')
+}
+Say "dsh：$($dshCmd.Source)（$dshNow）— $dshWhy"
+Say "node：$($node.Source)（$nodeV）"
+if (-not (Test-DshVerOk $dshNow)) {
+  Warn "dsh $dshNow 不在插件声明的兼容范围（0.1.x / 0.2.x）内，插件可能加载不了。要换版本：install-host.ps1 -DshVersion 0.2.0-rc.2（脚本默认不动你现有的 dsh）"
+}
 
 # 3) 源码（没有 git 就用 codeload 下 zip 解压）
 function Fetch-Repo($url, $dir) {
@@ -111,7 +149,15 @@ Say '写用户环境变量'
 [Environment]::SetEnvironmentVariable('QQ_WORKSPACE', $Workspace, 'User')
 [Environment]::SetEnvironmentVariable('DSH_HOME', $DshHome, 'User')
 
-# 7) 开机自启：计划任务，登录时起一个后台窗口跑 dsh web
+# 7) 装 dsh 启动器（登记真实地址，控制台据此自发现端口；四种部署方式共用同一份实现）
+$binDir = Join-Path $DataRoot 'bin'
+New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+$runnerJs = Join-Path $binDir 'dsh-web-run.mjs'
+$runnerSrc = Join-Path $PSScriptRoot '..\dsh-web-run.mjs'
+if (Test-Path $runnerSrc) { Copy-Item $runnerSrc $runnerJs -Force; Say "装 dsh 启动器 → $runnerJs" }
+else { Warn "没找到 $runnerSrc：跳过启动器（控制台改用环境变量找端口）" }
+
+# 8) 开机自启：计划任务，登录时起一个后台窗口跑 dsh web
 if (-not $NoAutostart) {
   $runner = Join-Path $DataRoot 'start-dsh.cmd'
   @"
@@ -119,7 +165,7 @@ if (-not $NoAutostart) {
 set QQ_DATA_ROOT=$DataRoot
 set DSH_HOME=$DshHome
 cd /d "$Workspace"
-"$(if (Get-Command dsh) { (Get-Command dsh).Source } else { 'dsh' })" web --no-open --port $Port
+node "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh) { (Get-Command dsh).Source } else { 'dsh' })" web --no-open --port $Port
 "@ | Set-Content -Encoding ASCII $runner
   Say "写启动器 $runner"
   schtasks /Create /TN 'qqbot-dsh-web' /SC ONLOGON /TR "cmd /c \"$runner\"" /F | Out-Null

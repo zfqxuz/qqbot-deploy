@@ -27,6 +27,16 @@ bash install.sh            # 一键：先体检机器，只问一句"机器人�
 - Linux：想每一步自己选就用 `bash install.sh --custom`（命令行向导），要页面版就 `bash install.sh --wizard`
 - 只想看看这台机器现在什么情况：`bash install.sh --check`（什么都不改）
 
+**装完要更新 / 想卸载？** 看 [UPDATE-UNINSTALL.md](UPDATE-UNINSTALL.md)（三种部署方式各自的更新与卸载命令、数据边界、备份）。
+
+**没有 Docker？** 一行装（Linux/macOS）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zfqxuz/qqbot-deploy/main/host/get-qqbot.sh | bash -s -- --qq <机器人QQ号>
+```
+
+Windows 见 [HOST-INSTALL.md](HOST-INSTALL.md)（PowerShell 一行，或 `install.cmd host` 双击）。
+
 （不需要手动 `cp .env.example .env`，脚本会自己生成并填好。）
 
 ---
@@ -65,6 +75,7 @@ powershell -ExecutionPolicy Bypass -File host\install-host.ps1 -QQ 你的QQ号  
 | 内存 | 建议 ≥ 2GB 可用（NapCat 里的 QQ 客户端是大头，约 0.7~1.5GB） |
 | 磁盘 | ≥ 2GB（镜像约 1.9GB，加数据留 2~3GB） |
 | 端口 | 3081 DSH / 8798 控制台 / 6700 桥接 / 6099 NapCat WebUI —— **被占用会自动换一个空闲的** |
+| 端口谁记住 | 不用你记：控制台自己发现宿主端口（环境变量 → 运行中的 harness 容器 → 控制台配置 → 运行中的进程 → 启动器登记的地址 → 日志）。桥接和 DSH 是解耦的，插件只认 6700 |
 | 其他 | 一个能登录的 QQ 号（建议小号，见下）；首次登录需要手机确认 |
 
 **关于"用哪个 QQ 号"**：机器人登录用的是独立的小号。桌面 QQ 和 NapCat 在 QQ 眼里都是"电脑端"，

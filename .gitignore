@@ -6,3 +6,9 @@ dsh.env
 # 老部署兼容（仅用于从 systemd 老部署迁移；本机保留，不进仓库）
 docker-compose.legacy-compat.yml
 build-context/
+
+# 备份产物（含 env 与凭据，绝不入库）
+backups/
+
+# 打补丁时留的备份（不进仓库；打包也排除）
+*.bak-*

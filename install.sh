@@ -27,6 +27,12 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 
+# 防呆：如果脚本是从"export 过 .env"的终端里跑的，shell 环境里的 QQ_* 会盖过 .env
+# （docker compose 插值：进程环境 > .env 文件），端口/路径会静默用错值。
+# 这里把 .env 里出现的 QQ_* 先从环境里卸掉，让 .env 说了算。
+for _k in $(sed -n 's/^\(QQ_[A-Z0-9_]*\)=.*/\1/p' .env 2>/dev/null); do unset "$_k"; done
+unset _k
+
 # ---------- 参数 ----------
 MODE_ARG=''; QQ_ARG=''; PORTS_ARG=''; ROOT_ARG=''; WS_ARG=''; PROXY_ARG=''
 TZ_ARG=''; CUSTOM=0; YES=0; CHECK=0; DRY=0; DESKTOP=0; LEGACY=0; DEV=''; REPAIR=0
@@ -141,8 +147,18 @@ port_in_use 3081 && LABEL_DSH="被占用（$(port_owner 3081)）"
 port_in_use 8798 && LABEL_CONSOLE="被占用（$(port_owner 8798)）"
 port_in_use 6700 && LABEL_BRIDGE="被占用（$(port_owner 6700)）"
 port_in_use 6099 && LABEL_NAPCAT="被占用（$(container_running napcat && printf 'napcat 容器' || port_owner 6099)）"
-PORT_DSH=$(free_port_from 3081)
-PORT_CONSOLE=$(free_port_from 8798)
+# 修复模式（--repair）例外：沿用 .env 里已有的端口与接入方式。那时候 3081/8798 正是
+# **这套栈自己**的容器在听（host 网络），再"自动挑下一个空闲的"只会把自己的端口顶走。
+ENV_DSH=$(sed -n 's/^QQ_DSH_PORT=//p' .env 2>/dev/null | head -1 | tr -d '[:space:]')
+ENV_CONSOLE=$(sed -n 's/^QQ_CONSOLE_PORT=//p' .env 2>/dev/null | head -1 | tr -d '[:space:]')
+ENV_MODE=$(sed -n 's/^QQ_ONEBOT_MODE=//p' .env 2>/dev/null | head -1 | tr -d '[:space:]')
+if [ "$REPAIR" = 1 ] && [ -n "$ENV_DSH$ENV_CONSOLE" ]; then
+  PORT_DSH=${ENV_DSH:-3081}
+  PORT_CONSOLE=${ENV_CONSOLE:-8798}
+else
+  PORT_DSH=$(free_port_from 3081)
+  PORT_CONSOLE=$(free_port_from 8798)
+fi
 BRIDGE_BUSY=0; port_in_use 6700 && BRIDGE_BUSY=1
 
 # QQ 号：分两类 —— "协议端正在用的" 和 "桌面 QQ 登录过的"（后者不能直接当机器人号）
@@ -246,10 +262,14 @@ fi
 
 # ---------- 2. 选择 ----------
 DEF_MODE=napcat
-[ -n "$NAPCAT_CONTAINER" ] || [ -n "$ONEBOT_ELSEWHERE" ] && DEF_MODE=reuse
+{ [ -n "$NAPCAT_CONTAINER" ] || [ -n "$ONEBOT_ELSEWHERE" ]; } && DEF_MODE=reuse
 MODE=''
 if [ -n "$MODE_ARG" ]; then
   MODE=$MODE_ARG
+elif [ "$REPAIR" = 1 ] && [ -n "$ENV_MODE" ]; then
+  # 修复模式：沿用 .env 里的接入方式，不重新猜（否则 napcat 会被误判成 reuse）
+  MODE=$ENV_MODE
+  log "修复模式：沿用 .env 里的接入方式 QQ_ONEBOT_MODE=$MODE"
 elif [ "$CUSTOM" = 1 ]; then
   DEF_CHOICE=1; [ "$DEF_MODE" = reuse ] && DEF_CHOICE=2
   _c=$(ask_choice "第 1/6 步 · QQ 怎么接" "$DEF_CHOICE" \
@@ -416,11 +436,22 @@ log "工作区：$(env_get QQ_WORKSPACE)（实测可写 ✓）"
 log "工作区根：$(env_get QQ_WORKSPACE_ROOT)（控制台里可绑定的范围）"
 
 # ---------- 5. compose 组合 ----------
+overlay_on() { # 需要某个覆盖文件时补上（已经带上就不重复，避免同一文件合并两次）
+  local want=$1 f
+  [ -f "$want" ] || return 1
+  for f in "${COMPOSE[@]}"; do
+    case "$f" in -*) continue ;; esac
+    [ "$(basename -- "$f")" = "$(basename -- "$want")" ] && return 1
+  done
+  COMPOSE+=(-f "$want")
+}
+DEV_ON=0; { [ -f docker-compose.dev.yml ] && [ "$(env_get QQ_DEV_MOUNT)" = 1 ]; } && DEV_ON=1
+
 COMPOSE=(docker compose -f docker-compose.yml)
 [ "$MODE" = napcat ] && COMPOSE+=(--profile napcat)
-[ "$DESKTOP" = 1 ] && COMPOSE+=(-f docker-compose.desktop.yml)
-[ "$LEGACY" = 1 ] && COMPOSE+=(-f docker-compose.legacy-compat.yml)
-{ [ -f docker-compose.dev.yml ] && [ "$(env_get QQ_DEV_MOUNT)" = 1 ]; } && COMPOSE+=(-f docker-compose.dev.yml)
+[ "$DESKTOP" = 1 ] && overlay_on docker-compose.desktop.yml
+[ "$LEGACY" = 1 ] && overlay_on docker-compose.legacy-compat.yml
+[ "$DEV_ON" = 1 ] && overlay_on docker-compose.dev.yml
 
 if [ "$REPAIR" = 1 ] && docker inspect qqbot-harness >/dev/null 2>&1; then
   CFG=$(docker inspect qqbot-harness --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}')
@@ -428,8 +459,22 @@ if [ "$REPAIR" = 1 ] && docker inspect qqbot-harness >/dev/null 2>&1; then
   if [ -n "$CFG" ] && [ -n "$PROJ" ]; then
     COMPOSE=(docker compose)
     IFS=',' read -r -a _files <<< "$CFG"
-    for f in "${_files[@]}"; do COMPOSE+=(-f "$f"); done
+    for f in "${_files[@]}"; do
+      # label 记的是"上次跑的时候带了哪些文件"，不含开关状态：开了 dev 之后再想关，
+      # 得按这次该有的开关把它剔掉，否则 --repair 会把 dev 覆盖文件又装回来。
+      case "$(basename -- "$f")" in
+        docker-compose.dev.yml)     [ "$DEV_ON" = 1 ]   || { log "修复模式：按当前开关去掉 $f（QQ_DEV_MOUNT 没开）"; continue; } ;;
+        docker-compose.desktop.yml) [ "$DESKTOP" = 1 ]  || { log "修复模式：按当前开关去掉 $f（--desktop 没开）"; continue; } ;;
+      esac
+      COMPOSE+=(-f "$f")
+    done
     cd "$PROJ" || die "进不去项目目录 $PROJ"
+    # 老容器的 label 只记文件、不记开关：沿用之后必须把"这次该开"的覆盖文件补回来，
+    # 否则 QQ_DEV_MOUNT=1 这类开关会被静默丢掉（v0.7.2 的坑，dev 覆盖文件就是这么消失的）。
+    if [ "$DEV_ON" = 1 ]; then
+      overlay_on docker-compose.dev.yml && log "修复模式：补上开发者模式覆盖文件 docker-compose.dev.yml"
+    fi
+    [ "$DESKTOP" = 1 ] && overlay_on docker-compose.desktop.yml
     log "修复模式：沿用运行中的组合 ${CFG}（目录 $PROJ）"
   fi
 fi
@@ -474,8 +519,15 @@ log "启动容器（$( [ "$MODE" = napcat ] && echo '含 QQ 协议端' || echo '
 
 log "等待就绪（最多 120 秒）"
 ok=0
+# 控制台镜像可能把端口写在 ENTRYPOINT 里（v0.7.2 就是 --port 8798），配置值和实际监听未必一致：
+# 两个都探，谁回 200 算谁，别假装超时。
+PROBE_PORTS="$PORT_CONSOLE"; [ "$PORT_CONSOLE" = 8798 ] || PROBE_PORTS="$PORT_CONSOLE 8798"
 for i in $(seq 1 60); do
-  code=$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$PORT_CONSOLE/login" 2>/dev/null || echo 000)
+  code=000
+  for p in $PROBE_PORTS; do
+    code=$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$p/login" 2>/dev/null || echo 000)
+    [ "$code" = 200 ] && break
+  done
   if [ "$code" = 200 ]; then
     if [ "$MODE" != napcat ] || ss -ltn 2>/dev/null | grep -q ':6700 '; then ok=1; break; fi
   fi

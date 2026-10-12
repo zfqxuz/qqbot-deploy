@@ -4,6 +4,29 @@
 **顺序照做即可**；每一步都写了「执行 → 验证 → 失败怎么办」。给 agent 执行也适用，
 规则见第 1 节（不要跳步、不要自己提权）。
 
+## 一行安装（推荐先试这个）
+
+Linux / macOS（把 `<机器人QQ号>` 换成你的）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zfqxuz/qqbot-deploy/main/host/get-qqbot.sh | bash -s -- --qq <机器人QQ号>
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/zfqxuz/qqbot-deploy/main/host/get-qqbot.ps1 -OutFile "$env:TEMP\get-qqbot.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\get-qqbot.ps1" -QQ <机器人QQ号>
+```
+
+它会：把部署包拉到 `~/qqbot/src/qqbot-deploy`（Windows：`%USERPROFILE%\qqbot\src\qqbot-deploy`）→ 交给包里的
+`host/install-host.sh`（Windows：`host\install-host.ps1`）。那个安装器**按你机器已有的东西分层**：
+有 Node 不装 Node、有 dsh 不装 dsh，缺什么补什么（见下一节的表）。
+
+- 只想看看会做什么：把 `--qq <号>` 换成 `--check`（只体检）或 `--dry-run`（打印每一步）
+- 已经在部署包里：`bash host/get-qqbot.sh --check`（不会重复下载）
+- 下面第 2 节起是**手工分步版**，脚本不能用时照它做
+
 > 有 Docker 的话别用本文，用 README 里的容器版（一条命令 + 网页向导，最省事）。
 
 ---
@@ -12,7 +35,7 @@
 
 | | 容器版（README） | 宿主版（本文） |
 |---|---|---|
-| 需要 | Docker / Docker Desktop | Node ≥ 20（缺了脚本会装） |
+| 需要 | Docker / Docker Desktop | Node ≥ 22.13（缺了脚本会装；插件用内置 `node:sqlite`，20.x 装不起来） |
 | Linux 自动化 | 全自动 | 全自动（除 NapCat 安装器要交互、linger 要一次 sudo） |
 | Windows 自动化 | 全自动（WSL） | 半自动：装 Node/dsh/自启可自动；NapCat 官方安装器要人工点 |
 | macOS 自动化 | 全自动 | 半自动：同上，NapCat 用官方 Mac 安装器 |
@@ -37,13 +60,43 @@ NapCat（官方安装）──反连 WS 6700──▶ dsh web（宿主进程，�
 
 ---
 
+## 1.5 分层：机器上已经有什么，脚本就少做什么
+
+宿主安装器**不会动你已经装好的东西**。按机器现状分四种情况：
+
+| 机器现状 | 脚本做什么 |
+|---|---|
+| Node ≥20 + dsh | 两个都不装，直接接线：源码 → 软链 → 播种 → 自启 |
+| Node ≥20，没有 dsh | 只装 dsh（`npm i -g @deepseek-ai/dsh`），装完验证 `dsh --version` 与插件兼容范围（0.1.x / 0.2.x） |
+| 没有 Node（或 <20） | 先装 Node（Linux：解压到 `~/.local`，**不需要 sudo**；macOS：Homebrew；Windows：winget 用户作用域），再装 dsh |
+| 已有 dsh 但版本不合适 | 只警告、**不擅自升级**；要换版本显式指定：`--dsh-version 0.2.0-rc.2`（Windows：`-DshVersion`） |
+
+另外两种常见情况：
+
+- **只想用现成的 dsh**：`--skip-dsh`（Windows：`-SkipDsh`）——脚本完全不碰 dsh，没有就直接报错退出。
+- **想主动升级 dsh**：`--upgrade-dsh`（Windows：`-UpgradeDsh`）——默认**不升级**，因为升级有可能弄坏正在跑的部署。
+
+先看清楚会做什么，再动手：`bash host/install-host.sh --check`（只读体检）/ `--dry-run`（打印每一步）。
+
+## 1.8 更新与卸载（宿主版）
+
+```bash
+bash host/update-host.sh --check     # 版本对照（本地源码 vs npm 最新），只读
+bash host/update-host.sh             # 更新部署包+源码+插件，重新播种，重启服务
+bash host/uninstall-host.sh --dry-run  # 先看卸载会删什么
+bash host/uninstall-host.sh            # 真卸（数据根默认保留；--purge 才删）
+```
+
+Windows：`host\update-host.ps1` / `host\uninstall-host.ps1`（同样的 `-Check` / `-DryRun` / `-Purge`）。
+完整说明（含容器版、插件版、备份、数据边界）见 [UPDATE-UNINSTALL.md](UPDATE-UNINSTALL.md)。
+
 ## 2. 七步总览（三平台一样）
 
 | 步 | 做什么 | 自动？ |
 |---|---|---|
 | 1 | 体检：系统、Node、端口、已有协议端、DSH home | 自动 |
-| 2 | 装 Node ≥ 20（已有就跳过） | Linux 自动（下 tarball 到 ~/.local，不需要 sudo）；macOS 用 brew；Windows 用 winget |
-| 3 | `npm install -g @deepseek-ai/dsh` | 自动 |
+| 2 | 装 Node ≥ 22.13（已有且够新就跳过） | Linux 自动（下 tarball 到 ~/.local，不需要 sudo）；macOS 用 brew；Windows 用 winget |
+| 3 | `npm install -g @deepseek-ai/dsh`（**已有就不装**） | 自动 |
 | 4 | 拉桥接 + 插件源码 | 自动（Windows 没 git 时用 zip 包） |
 | 5 | 接线：插件软链进 `$DSH_HOME/plugins`、桥接软链进 profile 的 `node_modules`，跑首启播种 | 自动 |
 | 6 | 装协议端 NapCat（**官方安装器是交互式的**） | **人工**（本文给命令与验证） |
@@ -91,6 +144,9 @@ ln -sfn ~/qqbot/src/dsh-qq-onebot-bridge ~/.dsh/profiles/web/node_modules/dsh-qq
 node ~/qqbot/src/dsh-qq-onebot-bridge/control/bin/qq-seed.mjs
 # 6) 手动起一次看有没有报错
 dsh web --no-open --port 3081       # 另开一个终端看 3081 能不能打开
+# 推荐：用随包的启动器起（它会登记真实地址，控制台据此自己发现端口，端口/令牌变了也不用配）
+#   mkdir -p ~/qqbot/bin && cp qqbot-deploy/dsh-web-run.mjs ~/qqbot/bin/
+#   node ~/qqbot/bin/dsh-web-run.mjs --port 3081 --data-root ~/qqbot -- dsh web --no-open --port 3081
 ```
 
 ### 验证（每步之后跑）
@@ -111,7 +167,7 @@ ss -ltn | grep -E ':(3081|6700|8798) '                              # 三条都�
 | `npm install -g` 很慢 | `npm config set registry https://registry.npmmirror.com` 后重跑 |
 | `dsh: command not found` | npm 全局 bin 不在 PATH：`npm config get prefix`，把它的 `bin` 加进 PATH |
 | 拉源码报 `could not read Username for github.com` | 两个源码仓库都是公开的，正常不会遇到。真遇到了：检查网络/代理，或用随包的源码 `--src-archive src.tar.gz`、指本地源码 `--src-dir <目录>` |
-| `systemctl --user` 不可用 | 无 systemd 的环境（容器/WSL1）跳过自启，手动 `dsh web --no-open --port 3081` |
+| `systemctl --user` 不可用 | 无 systemd 的环境（容器/WSL1）跳过自启，手动起：`node ~/qqbot/bin/dsh-web-run.mjs --port 3081 --data-root ~/qqbot -- dsh web --no-open --port 3081` |
 | 注销后服务停了 | `sudo loginctl enable-linger $(id -un)`（**这一步要用户自己执行**） |
 
 ---

@@ -1,0 +1,147 @@
+# ============================================================
+#  构建"发布版安装器"：.deb / .rpm / Windows .exe / macOS .pkg
+#
+#  触发：推 v* tag（例：git tag v0.7.3 && git push --tags），或在 Actions 页手动 Run 并填版本号。
+#  产物挂到本仓库的 Release 上，用户即可下载：
+#    qqbot-deploy_<版本>_all.deb      Debian/Ubuntu：dpkg -i，然后 qqbot-install
+#    qqbot-deploy-<版本>-1.*.noarch.rpm  Fedora/RHEL：rpm -i，然后 qqbot-install
+#    qqbot-deploy-<版本>-setup.exe    Windows：双击安装 → 开始菜单"安装 QQ 机器人"
+#    qqbot-deploy-<版本>.pkg          macOS：installer -pkg … ，然后 qqbot-install
+#
+#  这些安装包只放文件、不起服务、不碰数据（包管理器只负责放文件，安装由用户显式发起）。
+#  未做代码签名 → Windows SmartScreen / macOS Gatekeeper 会提示，文档里已写明绕法。
+# ============================================================
+name: build-installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（默认取 tag；手动跑时填，例如 0.7.3）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  # tag 形如 v0.7.3；手动触发时用输入的版本号
+  RAW_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 所有 shell 脚本语法检查
+        run: |
+          set -e
+          n=0
+          while IFS= read -r -d '' f; do bash -n "$f"; n=$((n+1)); done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          echo "bash -n 通过：$n 个脚本"
+      - name: 所有 mjs 脚本语法检查
+        run: |
+          set -e
+          for f in $(find . -name '*.mjs' -not -path './.git/*'); do node --check "$f"; echo "node --check 通过：$f"; done
+
+  linux:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 装 rpmbuild（打 .rpm 用）
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: 打 .deb
+        run: bash packaging/linux/build-deb.sh "${RAW_VERSION#v}" dist
+      - name: 打 .rpm
+        run: bash packaging/linux/build-rpm.sh "${RAW_VERSION#v}" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: dist/*.deb
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 组装 payload（白名单，绝不带 .env / 备份 / 构建产物）
+        shell: pwsh
+        run: |
+          $dst = 'packaging\windows\payload'
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          $items = @('install.sh','install.cmd','install.command','update.sh','uninstall.sh',
+                     'backup.sh','restore.sh','README.md','HOST-INSTALL.md','UPDATE-UNINSTALL.md',
+                     'docker-compose.yml','docker-compose.desktop.yml','docker-compose.dev.yml',
+                     'dsh-web-run.mjs','install-wizard.html','install-wizard.py','host','.env.example')
+          foreach ($i in $items) { if (Test-Path $i) { Copy-Item -Recurse -Force $i $dst } }
+          Get-ChildItem $dst | Select-Object Name | Format-Table
+      - name: 装 Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: 编译安装器
+        shell: pwsh
+        run: |
+          $ver = $env:RAW_VERSION.TrimStart('v')
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { $iscc = 'C:\Program Files\Inno Setup 6\ISCC.exe' }
+          & $iscc "packaging\windows\qqbot.iss" "/DAppVersion=$ver"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "packaging\windows\Output\*.exe" dist -Force
+          Get-ChildItem dist | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*.exe
+          if-no-files-found: error
+
+  macos:
+    needs: validate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 打 .pkg
+        run: bash packaging/macos/build-pkg.sh "${RAW_VERSION#v}" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist/*.pkg
+          if-no-files-found: error
+
+  release:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 汇总产物
+        run: find artifacts -type f | sort
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}
+          generate_release_notes: true
+          files: artifacts/**/*
+          body: |
+            安装包（只放文件，不起服务、不碰数据；装完自己跑安装命令）：
+
+            - **Debian/Ubuntu**：`sudo dpkg -i qqbot-deploy_*_all.deb` → `qqbot-install`
+            - **Fedora/RHEL**：`sudo rpm -i qqbot-deploy-*.rpm` → `qqbot-install`
+            - **Windows**：双击 `qqbot-deploy-*-setup.exe` → 开始菜单「安装 QQ 机器人（不用 Docker）」
+            - **macOS**：`sudo installer -pkg qqbot-deploy-*.pkg -target /` → `qqbot-install`
+
+            更新 / 卸载：`qqbot-update` / `qqbot-uninstall`（默认保留数据）。
+            完整说明见包内 `UPDATE-UNINSTALL.md`；也可以直接用一行安装：
+            `curl -fsSL https://raw.githubusercontent.com/zfqxuz/qqbot-deploy/main/host/get-qqbot.sh | bash -s -- --qq <机器人QQ号>`
+
+            注意：安装包**未做代码签名** —— Windows 会提示"未知发布者"（更多信息 → 仍要运行），
+            macOS 首次打开需右键打开或 `xattr -d com.apple.quarantine`。

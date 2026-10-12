@@ -6,17 +6,26 @@
 #   Node（npm 装 dsh）→ 桥接+插件（源码软链进 DSH home）→ NapCat（官方安装方式）
 #   → systemd --user（Linux）/ launchd（macOS）管自启 → 控制台 /setup 收尾
 #
+# 分层安装：**机器上已经有的东西一律不动**，缺什么补什么
+#   已有 Node ≥20 + dsh   → 两个都不装，直接接线（插件 / 软链 / 自启）
+#   已有 Node ≥20，没 dsh → 只装 dsh
+#   没 Node（或 <20）     → 先装 Node（Linux 解压到 ~/.local，不用 sudo；macOS 用 brew），再装 dsh
+#   已有 dsh 但版本对不上 → 只警告，不擅自升级（要换版本用 --dsh-version）
+#
 # 用法：
 #   bash install-host.sh                    一键（检测到就沿用，缺什么补什么）
 #   bash install-host.sh --check            只体检，什么都不改
 #   bash install-host.sh --dry-run          打印将要执行的每一步，不执行
 #   bash install-host.sh --qq 2267595782 --port 3081 --console-port 8798
 #   bash install-host.sh --data-root ~/qqbot --no-autostart
+#   bash install-host.sh --upgrade-dsh      主动把 dsh 升到最新（默认不动已有的）
+#   bash install-host.sh --dsh-version 0.2.0-rc.2   装指定版本
+#   bash install-host.sh --skip-dsh         完全不碰 dsh（机器上没有就直接报错）
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 QQ_ARG=''; PORT=3081; CPORT=8798; ROOT="$HOME/qqbot"; DSH_VER=''; WS_ARG=''
-DRY=0; CHECK=0; AUTO=1; SKIP_DSH=0; SRC_OVERRIDE=''; SRC_ARCHIVE=''
+DRY=0; CHECK=0; AUTO=1; SKIP_DSH=0; UPGRADE_DSH=0; SRC_OVERRIDE=''; SRC_ARCHIVE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --qq) QQ_ARG=${2:-}; shift 2 ;;
@@ -27,11 +36,12 @@ while [ $# -gt 0 ]; do
     --dsh-version) DSH_VER=${2:-}; shift 2 ;;
     --no-autostart) AUTO=0; shift ;;
     --skip-dsh) SKIP_DSH=1; shift ;;
+    --upgrade-dsh) UPGRADE_DSH=1; shift ;;
     --src-dir) SRC_OVERRIDE=${2:-}; shift 2 ;;
     --src-archive) SRC_ARCHIVE=${2:-}; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --check) CHECK=1; shift ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR>1 && /^set -/{exit} NR>1{print}' "$0"; exit 0 ;;
     *) echo "未知参数：$1（试试 --help）"; exit 2 ;;
   esac
 done
@@ -68,12 +78,23 @@ echo
 echo "============================================================"
 echo " 不用 Docker 的安装 · 体检（$PLATFORM/$NODE_ARCH）"
 echo "============================================================"
+# Node 版本门槛：[fix 2026-10-12] 插件静态 import 'node:sqlite'，需要 ≥ 22.13
+# （22.5~22.12 要 --experimental-sqlite，20.x 直接抛错）。以前这里写的是 ≥20，会放行装不起来的机器。
+node_ok() { # $1 = vX.Y.Z
+  local v=${1#v} maj min
+  maj=${v%%.*}; min=${v#*.}; min=${min%%.*}
+  case "$maj" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$maj" -gt 22 ] && return 0
+  [ "$maj" -lt 22 ] && return 1
+  case "$min" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$min" -ge 13 ]
+}
 NODE_V=$(node -v 2>/dev/null || echo '无')
 NODE_OK=0
-case "$NODE_V" in v2[0-9].*|v[3-9][0-9].*) NODE_OK=1 ;; esac
-printf '  %-16s %s\n' "node" "$NODE_V $([ "$NODE_OK" = 1 ] && echo '（≥20，够用）' || echo '（缺或太旧 → 会装一份到 ~/.local）')"
+node_ok "$NODE_V" && NODE_OK=1
+printf '  %-16s %s\n' "node" "$NODE_V $([ "$NODE_OK" = 1 ] && echo '（≥22.13，够用）' || echo '（缺或太旧：需要 ≥22.13 → 会装一份到 ~/.local）')"
 printf '  %-16s %s\n' "npm / git / curl" "$(have npm) / $(have git) / $(have curl)"
-printf '  %-16s %s\n' "已装 dsh" "$(command -v dsh >/dev/null 2>&1 && dsh --version 2>/dev/null | head -1 || echo 没有)"
+printf '  %-16s %s\n' "已装 dsh" "$(command -v dsh >/dev/null 2>&1 && echo "$(dsh --version 2>/dev/null | head -1)（在，默认不动）" || echo '没有 → 会装')"
 printf '  %-16s %s\n' "DSH home" "$DSH_HOME"
 printf '  %-16s %s\n' "数据根 / 工作区" "$ROOT / $WORKSPACE"
 printf '  %-16s %s\n' "源码" "桥接 $([ -d "$BRIDGE_DIR/.git" ] && echo 已有 || echo 要拉) · 插件 $([ -d "$PLUGINS_DIR/.git" ] && echo 已有 || echo 要拉)"
@@ -119,17 +140,45 @@ if [ "$NODE_OK" = 0 ]; then
   fi
 fi
 
-# ---------- 2. dsh ----------
-command -v npm >/dev/null 2>&1 || [ "$DRY" = 1 ] || die "没有 npm：先装好 Node ≥20 再重跑"
+# ---------- 2. dsh（分层：有就不动，缺才装，点名才换）----------
+# 和 Node 一个原则：不擅自升级用户机器上已有的 dsh（升级可能让跑得好好的部署挂掉）。
+# 插件声明的兼容范围是 0.1.x / 0.2.x（见 package.json 的 peerDependencies）。
+dsh_ver_ok() { case "$1" in 0.1.*|0.2.*) return 0 ;; *) return 1 ;; esac; }
+CUR_DSH=$(command -v dsh 2>/dev/null || true)
+CUR_DSH_V=$([ -n "$CUR_DSH" ] && dsh --version 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+NEED_DSH=0; DSH_WHY=''
 if [ "$SKIP_DSH" = 1 ]; then
-  command -v dsh >/dev/null 2>&1 || die "--skip-dsh 但找不到 dsh"
-  log "按参数跳过 npm 安装，用现有的 dsh：$(dsh --version 2>/dev/null | head -1)"
+  [ -n "$CUR_DSH" ] || die "--skip-dsh 但找不到 dsh（想让脚本装就别加这个参数）"
+  DSH_WHY='按 --skip-dsh 不动它'
+elif [ -n "$DSH_VER" ]; then
+  case "$CUR_DSH_V" in
+    "$DSH_VER"|"${DSH_VER#v}") DSH_WHY="已经是要的版本 $CUR_DSH_V，跳过" ;;
+    *) NEED_DSH=1; DSH_WHY="按 --dsh-version $DSH_VER 安装（现有：${CUR_DSH_V:-无}）" ;;
+  esac
+elif [ "$UPGRADE_DSH" = 1 ]; then
+  NEED_DSH=1; DSH_WHY="按 --upgrade-dsh 升级（现有：${CUR_DSH_V:-无}）"
+elif [ -z "$CUR_DSH" ]; then
+  NEED_DSH=1; DSH_WHY='机器上没有 dsh，装一个'
 else
-  run "安装/升级 dsh" npm install -g --no-fund --no-audit "@deepseek-ai/dsh${DSH_VER:+@$DSH_VER}"
+  DSH_WHY="已有 dsh $CUR_DSH_V，跳过（要升级：--upgrade-dsh）"
+fi
+if [ "$NEED_DSH" = 1 ]; then
+  command -v npm >/dev/null 2>&1 || [ "$DRY" = 1 ] || die "没有 npm：先装好 Node ≥20 再重跑"
+  run "安装 dsh${DSH_VER:+@$DSH_VER}（$DSH_WHY）" npm install -g --no-fund --no-audit "@deepseek-ai/dsh${DSH_VER:+@$DSH_VER}"
+  CUR_DSH=$(command -v dsh 2>/dev/null || true)
+  [ -n "$CUR_DSH" ] || [ "$DRY" = 1 ] || die "装完找不到 dsh：npm 全局 bin 不在 PATH。
+    看 npm prefix -g 的 bin 目录并加进 PATH；需要 root 才能全局装的话，改用 nvm 或 npm config set prefix ~/.local"
+  CUR_DSH_V=$([ -n "$CUR_DSH" ] && dsh --version 2>/dev/null | head -1 | tr -d '[:space:]' || true)
 fi
 if [ "$DRY" = 0 ]; then
-  command -v dsh >/dev/null 2>&1 || die "装完找不到 dsh（npm 全局 bin 不在 PATH？npm bin -g 看看）"
-  log "dsh 版本：$(dsh --version 2>/dev/null | head -1)"
+  [ -n "$CUR_DSH" ] || die "找不到 dsh（既装不上也没有现成的）"
+  log "dsh：$CUR_DSH（$CUR_DSH_V）— $DSH_WHY"
+  log "node：$(command -v node)（$(node -v 2>/dev/null)）· npm：$(command -v npm)"
+fi
+# 版本兼容性检查：不管干跑还是真跑都要说出来（它描述的是"现在机器上的 dsh"）
+if [ -n "$CUR_DSH_V" ] && ! dsh_ver_ok "$CUR_DSH_V"; then
+  warn "dsh $CUR_DSH_V 不在插件声明的兼容范围（0.1.x / 0.2.x）内，插件可能加载不了。
+    要换版本：bash install-host.sh --dsh-version 0.2.0-rc.2（脚本默认不动你现有的 dsh）"
 fi
 
 # ---------- 3. 源码 ----------
@@ -190,11 +239,28 @@ else
     echo "QQ_ACCOUNT=${QQ_ARG:-}"
     echo "QQ_WORKSPACE=$WORKSPACE"
     echo "QQ_BRIDGE_DIR=$BRIDGE_DIR"
+    echo "DSH_HOME=$DSH_HOME"
     echo "QQ_PLUGINS_DIR=$DSH_HOME/plugins"
     [ -n "$PROXY_URL" ] && { echo "HTTP_PROXY=$PROXY_URL"; echo "HTTPS_PROXY=$PROXY_URL"; echo "http_proxy=$PROXY_URL"; echo "https_proxy=$PROXY_URL"; }
     echo "NO_PROXY=127.0.0.1,localhost,::1"
   } > "$ENV_FILE"
   log "写了 $ENV_FILE"
+fi
+
+# ---------- 5.5 启动器（登记真实地址，控制台据此自发现端口）----------
+# 容器版由镜像里的 /app/dsh-web-run.mjs 干这件事；宿主模式用同一份脚本，行为一致：
+# 每次启动把 dsh 真正监听的地址写进 <数据根>/state/dsh-web-url.txt。
+RUNNER_SRC="$HERE/../dsh-web-run.mjs"
+if [ -f "$RUNNER_SRC" ]; then
+  if [ "$DRY" = 1 ]; then
+    echo "  · 装 dsh 启动器 → $ROOT/bin/dsh-web-run.mjs"
+  else
+    mkdir -p "$ROOT/bin"
+    cp "$RUNNER_SRC" "$ROOT/bin/dsh-web-run.mjs"
+    log "装了 dsh 启动器 → $ROOT/bin/dsh-web-run.mjs（控制台据此自发现宿主端口）"
+  fi
+else
+  warn "没找到 $RUNNER_SRC（部署包不完整？）：跳过启动器，控制台改用环境变量/进程扫描找端口"
 fi
 
 # ---------- 6. 自启 ----------
@@ -213,7 +279,7 @@ Type=simple
 WorkingDirectory=$WORKSPACE
 EnvironmentFile=-$ENV_FILE
 Environment=DSH_HOME=$DSH_HOME
-ExecStart=$NODE_BIN $(dirname "$(readlink -f "$(command -v dsh)")")/dsh web --no-open --port $PORT
+ExecStart=$NODE_BIN $ROOT/bin/dsh-web-run.mjs --port $PORT --data-root $ROOT -- $NODE_BIN $(dirname "$(readlink -f "$(command -v dsh)")")/dsh web --no-open --port $PORT
 Restart=on-failure
 RestartSec=5
 
@@ -242,7 +308,7 @@ UNIT
     loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q 'Linger=yes' \
       || warn "没开 linger：注销后服务会停。要开机就自动跑： sudo loginctl enable-linger $(id -un)"
   else
-    warn "没有 systemd --user，跳过自启。手动起：dsh web --no-open --port $PORT"
+    warn "没有 systemd --user，跳过自启。手动起：node $ROOT/bin/dsh-web-run.mjs --port $PORT --data-root $ROOT -- dsh web --no-open --port $PORT"
   fi
 elif [ "$AUTO" = 1 ] && [ "$PLATFORM" = macos ]; then
   AD="$HOME/Library/LaunchAgents"
@@ -256,7 +322,7 @@ elif [ "$AUTO" = 1 ] && [ "$PLATFORM" = macos ]; then
 <plist version="1.0"><dict>
   <key>Label</key><string>com.qqbot.dsh-web</string>
   <key>ProgramArguments</key><array>
-    <string>$NODE_BIN</string><string>$DSH_BIN</string><string>web</string><string>--no-open</string><string>--port</string><string>$PORT</string>
+    <string>$NODE_BIN</string><string>$ROOT/bin/dsh-web-run.mjs</string><string>--port</string><string>$PORT</string><string>--data-root</string><string>$ROOT</string><string>--</string><string>$DSH_BIN</string><string>web</string><string>--no-open</string><string>--port</string><string>$PORT</string>
   </array>
   <key>WorkingDirectory</key><string>$WORKSPACE</string>
   <key>EnvironmentVariables</key><dict>
