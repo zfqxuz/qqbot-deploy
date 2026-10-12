@@ -80,6 +80,12 @@ const ownerCli = (() => {
 })()
 function ownerAction(action) {
   if (ownerCli === '') return
+  // [fix 2026-10-12] 容器里不写"宿主"心跳：本进程可能是 supervisor 的子进程（QQ_HARNESS_OWNED_BY），
+  // 或者本身就是容器（QQ_HARNESS_KIND=container）—— 这时再登记一条 kind=host 的心跳，
+  // 会被容器里的 supervisor 当成"宿主回来了"，满 T2 后把自己的 harness drain 掉（自杀循环）。
+  // 宿主场景（install.sh 直接起）两个变量都为空，照旧登记。
+  if (String(process.env.QQ_HARNESS_KIND ?? '').trim() === 'container') return
+  if (String(process.env.QQ_HARNESS_OWNED_BY ?? '').trim() !== '') return
   try {
     const result = spawnSync(process.execPath, [ownerCli, '--kind', 'host', `--${action}`, '--instance', OWNER_INSTANCE, '--port', String(port)], { encoding: 'utf8', timeout: 10_000 })
     const line = String(result.stdout ?? '').trim().split('\n').pop() ?? ''
