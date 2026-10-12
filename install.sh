@@ -106,8 +106,8 @@ cat <<'BANNER'
 BANNER
 
 # ---------- 0. 环境检查 ----------
-command -v docker >/dev/null || die "没找到 docker。先装 Docker Engine 或 Docker Desktop，再回来跑这条命令。"
-docker info >/dev/null 2>&1 || die "docker 命令在，但守护进程连不上（Docker Desktop 没启动？或当前用户不在 docker 组？）"
+command -v docker >/dev/null || die "没找到 docker。两条路：\n    1) 装 Docker（Engine 或 Docker Desktop）后重跑本脚本；\n    2) 不想装 Docker → 用不用 Docker 的安装： bash host/install-host.sh（顺序见 HOST-INSTALL.md）"
+docker info >/dev/null 2>&1 || die "docker 命令在，但守护进程连不上（Docker Desktop 没启动？或当前用户不在 docker 组？）\n不想折腾 Docker 的话： bash host/install-host.sh（见 HOST-INSTALL.md）"
 docker compose version >/dev/null 2>&1 || die "缺 docker compose 插件（需要 Docker Compose v2：docker compose version 能打印版本）"
 
 port_in_use() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
@@ -459,7 +459,11 @@ if [ "$NEED_PULL" = 1 ]; then
       warn "拉取失败，尝试本地构建（需要源码仓库）"
       ./build.sh || die "本地构建也失败了，看上面的输出"
     else
-      die "拉取失败：检查网络，或确认 .env 里的 QQ_HARNESS_IMAGE/QQ_CONSOLE_IMAGE 可访问"
+      case "$HIMG" in
+        */*) die "拉取失败：检查网络，或确认 .env 里的 QQ_HARNESS_IMAGE/QQ_CONSOLE_IMAGE 可访问" ;;
+        *)   die "拉取失败：QQ_HARNESS_IMAGE=$HIMG 是**裸镜像名**，会被当成 Docker Hub 的镜像去拉。
+     要么写全地址（含镜像仓库域名），要么先在本地构建：./build.sh" ;;
+      esac
     fi
   fi
 fi

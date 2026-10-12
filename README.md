@@ -31,6 +31,31 @@ bash install.sh            # 一键：先体检机器，只问一句"机器人�
 
 ---
 
+## 不想装 Docker？（Linux / Windows / macOS 都支持）
+
+机器人不是必须用 Docker —— 容器只是我们选的打包方式。不用 Docker 的安装是同一套东西换成本机进程：
+`npm` 装 dsh、桥接与插件软链进 DSH home、NapCat 用官方安装方式、自启用
+systemd --user（Linux）/ 计划任务（Windows）/ launchd（macOS）。
+
+```bash
+bash host/install-host.sh --check        # 只体检，什么都不改
+bash host/install-host.sh --qq 你的QQ号    # Linux / macOS 一键
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File host\install-host.ps1 -Check
+powershell -ExecutionPolicy Bypass -File host\install-host.ps1 -QQ 你的QQ号   # Windows
+```
+
+**分步顺序、每步的验证命令、失败处理、回退办法**都在 [HOST-INSTALL.md](HOST-INSTALL.md)，
+照着做、或者交给 agent 执行都行。三点先说清：
+
+- NapCat 官方安装器是交互式的（选安装方式 + 扫码登录），这一步必须人工，三个系统都一样
+- Windows / macOS 是"半自动"：装 Node、拉源码、接线、自启都自动；NapCat 要你自己点
+- 宿主模式升级 = `npm i -g @deepseek-ai/dsh` + `git pull` + 重启服务，没有容器那种"改一行 tag"
+
+---
+
 ## 需要什么
 
 | 项目 | 要求 |
