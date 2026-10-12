@@ -104,7 +104,7 @@ Write-Host ("  npm / git      : {0} / {1}" -f [bool]$npm, [bool]$git)
 Write-Host ("  dsh            : {0}" -f $(if (Get-Command dsh -ErrorAction SilentlyContinue) { "$(& dsh --version)（在，默认不动）" } else { '没有 → 会装' }))
 Write-Host ("  DSH home       : {0}" -f $DshHome)
 Write-Host ("  数据根/工作区  : {0} / {1}" -f $DataRoot, $Workspace)
-$p6700 = (Get-NetTCPConnection -LocalPort 6700 -ErrorAction SilentlyContinue)
+$p6700 = $null; if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) { try { $p6700 = Get-NetTCPConnection -LocalPort 6700 -ErrorAction SilentlyContinue } catch { } }
 Write-Host ("  6700 桥接端口  : {0}" -f $(if ($p6700) { '被占用（有协议端在跑？）' } else { '空' }))
 Write-Host '============================================================'
 if ($Check) { Say '只体检（-Check）：什么都没改'; if ($LogFile) { Say "本次日志：$LogFile" }; Stop-Log; Pause-Here; exit 0 }

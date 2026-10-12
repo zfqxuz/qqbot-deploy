@@ -87,11 +87,20 @@ if (Test-Path $RunnerSrc) { RunIt "刷新 dsh 启动器 → $RunnerJs" { Copy-It
 $seed = Join-Path $BridgeDir 'control\bin\qq-seed.mjs'
 if (Test-Path $seed) { RunIt '重新播种（只补缺）' { & node $seed } }
 
-# 重启计划任务
-if ($NoRestart) { Say '按参数不重启（-NoRestart）' }
-elseif (Get-ScheduledTask -TaskName 'qqbot-dsh-web' -ErrorAction SilentlyContinue) {
-  RunIt '重启计划任务 qqbot-dsh-web' { schtasks /End /TN 'qqbot-dsh-web' | Out-Null; schtasks /Run /TN 'qqbot-dsh-web' | Out-Null }
-} else { Warn '没有计划任务 qqbot-dsh-web：如果你是手动起的 dsh，自己重启它' }
+# 重启计划任务（Get-ScheduledTask 可能不存在于某些精简系统 → 先探测再用，别让脚本直接死）
+if ($NoRestart) {
+  Say '按参数不重启（-NoRestart）'
+} else {
+  $task = $null
+  if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+    try { $task = Get-ScheduledTask -TaskName 'qqbot-dsh-web' -ErrorAction SilentlyContinue } catch { }
+  }
+  if ($task) {
+    RunIt '重启计划任务 qqbot-dsh-web' { schtasks /End /TN 'qqbot-dsh-web' | Out-Null; schtasks /Run /TN 'qqbot-dsh-web' | Out-Null }
+  } else {
+    Warn '没有计划任务 qqbot-dsh-web：如果你是手动起的 dsh，自己重启它'
+  }
+}
 
 if (-not $DryRun) {
   Start-Sleep -Seconds 3
