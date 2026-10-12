@@ -14,7 +14,9 @@ command -v rpmbuild >/dev/null || { echo "[rpm] 需要 rpmbuild（apt install rp
 
 # RPM 的 Version 字段不允许 "-"（CI 实测报错：Illegal char '-' in: Version: 0.7.3-dev）。
 # 用 "~" 替代：在 RPM 里 ~ 表示预发布，排序上小于正式版，语义正好对（0.7.3~dev < 0.7.3）。
-SAFEVER=${VER//-/~}
+# 用 tr 而不是 ${VER//-/~}：后者里那个 ~ 会被 bash 当波浪号展开成 $HOME
+# （CI 实测：0.7.3-dev 变成了 0.7.3/home/runnerdev，tar 直接找不到文件）
+SAFEVER=$(printf '%s' "$VER" | tr '-' '~')
 echo "[rpm] 版本：$VER → RPM 版本 $SAFEVER"
 
 TOP=$(mktemp -d)
