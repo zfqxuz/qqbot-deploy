@@ -110,7 +110,7 @@ ss -ltn | grep -E ':(3081|6700|8798) '                              # 三条都�
 | 下 Node 超时 | 换版本：`NODE_TARBALL_VER=v20.19.0 bash host/install-host.sh` 或换国内镜像 |
 | `npm install -g` 很慢 | `npm config set registry https://registry.npmmirror.com` 后重跑 |
 | `dsh: command not found` | npm 全局 bin 不在 PATH：`npm config get prefix`，把它的 `bin` 加进 PATH |
-| 拉源码报 `could not read Username for github.com` | 仓库是私有的。三种办法：拿到协作者权限 / `gh auth login` / 用随包的源码 `--src-archive src.tar.gz`，或指本地源码 `--src-dir <目录>` |
+| 拉源码报 `could not read Username for github.com` | 两个源码仓库都是公开的，正常不会遇到。真遇到了：检查网络/代理，或用随包的源码 `--src-archive src.tar.gz`、指本地源码 `--src-dir <目录>` |
 | `systemctl --user` 不可用 | 无 systemd 的环境（容器/WSL1）跳过自启，手动 `dsh web --no-open --port 3081` |
 | 注销后服务停了 | `sudo loginctl enable-linger $(id -un)`（**这一步要用户自己执行**） |
 
@@ -249,6 +249,7 @@ npm uninstall -g @deepseek-ai/dsh
 
 ## 9. 已知限制（写在前面，免得到时候怪文档）
 
+- 源码仓库（dsh-qq-onebot-bridge / dsh-plugins）都是**公开**的，`git clone` 不需要账号；后面若要私有化，改用 `--src-archive` 随包源码。
 - **NapCat 的官方安装器是交互式的**（选安装方式、扫码登录），这三条路都做不到无人值守 ——
   这是唯一必须人工的一步，绕不过去。
 - Windows 的 `install-host.ps1` 是在 Linux 上写的，**没有 Windows 机器实测过**；
