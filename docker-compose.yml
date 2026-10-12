@@ -1,4 +1,4 @@
-# QQ 机器人整套栈（[阶段 2] 2026-10-12）
+# QQ 机器人整套栈（[round5] 2026-10-12）
 #
 # 设计取舍（和现状保持行为一致，先不改造架构）：
 #   - napcat 与 harness 都用 host 网络：NapCat 要反连 ws://127.0.0.1:6700，
@@ -7,27 +7,38 @@
 #   - harness 的代理由 entrypoint 守卫决定：探活可用就带代理启动、不可用就直连，
 #     运行期翻转则退出让 compose 重启后重新决策。
 #
-# 路径策略（重要）：本文件**不含任何宿主绝对路径**，全部来自 .env：
-#   QQ_DATA_ROOT  桥接数据/日志/状态/配置（容器内固定挂到 /data/qqbot）
-#   QQ_DSH_HOME   DSH home（profile、插件、会话、凭据；容器内挂到 /data/dsh）
-#   QQ_NAPCAT_*   QQ 登录态、NapCat 配置、二维码缓存
-#   QQ_REPOS_ROOT 三个仓库共同的父目录（构建上下文；开发期热更也用它）
-# 首次部署跑 ./install.sh，它会按当前用户 HOME 生成这些值并建目录。
+# 路径策略：本文件不含任何宿主绝对路径，全部来自 .env：
+#   QQ_DATA_ROOT        桥接数据/日志/状态/配置（容器内固定挂到 /data/qqbot）
+#   QQ_DSH_HOME         DSH home（profile、插件、会话、凭据；容器内挂到 /data/dsh）
+#   QQ_WORKSPACE        DSH 的工作区（容器内 working_dir；必须在 QQ_WORKSPACE_ROOT 之下）
+#   QQ_WORKSPACE_ROOT   工作区根：整棵按原路径挂进容器且**可写**。
+#                       它决定控制台「系统配置」里能把工作区绑到哪个范围 —— 装完就能改，
+#                       不需要再手工改 .env / 重建命令（默认 = QQ_WORKSPACE 的父目录）
+#   QQ_DOCKER_GID       /var/run/docker.sock 的属组（install.sh 自动探测），
+#                       给容器放通 docker —— 装完容器里就能 docker ps/logs/build
+#   QQ_NAPCAT_*         QQ 登录态、NapCat 配置、二维码缓存
+#   QQ_REPOS_ROOT       三个仓库共同的父目录（开发模式挂载 + 构建上下文）
+# 首次部署跑 ./install.sh：它会按当前用户 HOME 生成这些值、建目录、校验可写。
 name: qqbot
 
 services:
   napcat:
+    # 可选组件：用 `--profile napcat` 才启动。
+    #   · 自带你自己的协议端容器 → 启用（install.sh 默认）
+    #   · 复用机器上已有的协议端 / 只起宿主+控制台 → 不启用
+    profiles: ["napcat"]
     image: ${NAPCAT_IMAGE:-docker.m.daocloud.io/mlikiowa/napcat-docker:latest}
     container_name: napcat
     network_mode: host
     restart: unless-stopped
     environment:
-      ACCOUNT: ${QQ_ACCOUNT:?必须在 .env 里设置 QQ_ACCOUNT（登录用的 QQ 号）}
+      # 只有启用 napcat profile 时才需要；不装协议端的人可以留空（install.sh 会拦一次）
+      ACCOUNT: ${QQ_ACCOUNT:-}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - ${QQ_NAPCAT_DATA:?请在 .env 设置 QQ_NAPCAT_DATA}:/app/.config/QQ
-      - ${QQ_NAPCAT_CONFIG:?请在 .env 设置 QQ_NAPCAT_CONFIG}:/app/napcat/config
-      - ${QQ_NAPCAT_CACHE:?请在 .env 设置 QQ_NAPCAT_CACHE}:/app/napcat/cache
+      - ${QQ_NAPCAT_DATA:-/tmp/qqbot-napcat-data}:/app/.config/QQ
+      - ${QQ_NAPCAT_CONFIG:-/tmp/qqbot-napcat-config}:/app/napcat/config
+      - ${QQ_NAPCAT_CACHE:-/tmp/qqbot-napcat-cache}:/app/napcat/cache
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:6099/ || exit 1"]
       interval: 30s
@@ -37,16 +48,21 @@ services:
 
   harness:
     # 镜像从哪来：本地 ./build.sh 构建（默认 qqbot-harness:<tag>）或 .env 指向的仓库
-    # 默认用预构建镜像（公开可拉）；想用本地构建的镜像就在 .env 里设 QQ_HARNESS_IMAGE=qqbot-harness:<tag>
-    image: ${QQ_HARNESS_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-harness:${QQ_TAG:-v0.7.0}}
+    image: ${QQ_HARNESS_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-harness:${QQ_TAG:-v0.7.2}}
     container_name: qqbot-harness
-    working_dir: ${QQ_WORKSPACE:?}          # 新会话落在这个工作区里（不设就落到 /data/qqbot）
+    working_dir: ${QQ_WORKSPACE:?}          # 新会话落在这个工作区里（entrypoint 还会按系统配置校正）
     # 以宿主用户身份跑：数据卷里的文件属主与宿主一致，用户不用 sudo 就能改自己的配置
     user: "${QQ_UID:-1000}:${QQ_GID:-1000}"
+    # docker 属组：容器里能直接用 docker（控制台状态台、开发模式构建）
+    group_add:
+      - "${QQ_DOCKER_GID:-1000}"
     network_mode: host
     restart: unless-stopped
+    # napcat 可能没启用（复用已有协议端时），所以是"可选依赖"
     depends_on:
-      - napcat
+      napcat:
+        condition: service_started
+        required: false
     # dsh.env 用来喂宿主级环境变量（代理、看门狗参数等）；文件不存在也能起（required: false）
     env_file:
       - path: ${QQ_ENV_FILE:-./dsh.env}
@@ -54,10 +70,11 @@ services:
     environment:
       QQ_DATA_ROOT: /data/qqbot
       DSH_HOME: /data/dsh
-      HOME: /data/qqbot          # 家目录也放在数据卷里：npm/git 配置随数据一起带走
+      HOME: /data/qqbot          # 家目录也放在数据卷里：npm/git/gh 配置随数据一起带走
       QQ_REPOS: /opt/repos
       DSH_PORT: ${QQ_DSH_PORT:-3081}
-      QQ_WORKSPACE: ${QQ_WORKSPACE:?请在 .env 设置 QQ_WORKSPACE（工作区目录，首启为空）}
+      QQ_WORKSPACE: ${QQ_WORKSPACE:?请在 .env 设置 QQ_WORKSPACE（工作区目录）}
+      QQ_WORKSPACE_ROOT: ${QQ_WORKSPACE_ROOT:-}
       QQ_ACCOUNT: ${QQ_ACCOUNT:-}
       QQ_VERSION: ${QQ_TAG:-v1}
       UPSTREAM_PROXY: ${UPSTREAM_PROXY:-}
@@ -67,12 +84,15 @@ services:
     volumes:
       - ${QQ_DATA_ROOT:?请在 .env 设置 QQ_DATA_ROOT}:/data/qqbot
       - ${QQ_DSH_HOME:?请在 .env 设置 QQ_DSH_HOME}:/data/dsh
-      - ${QQ_WORKSPACE:?}:${QQ_WORKSPACE:?}   # 工作区：按原路径挂进去；首启为空，重建容器不动它
+      # 工作区根：按原路径挂进来且可写。范围内的目录都能在控制台里绑定，装完即用。
+      - ${QQ_WORKSPACE_ROOT:?请在 .env 设置 QQ_WORKSPACE_ROOT（跑一次 install.sh 会自动填）}:${QQ_WORKSPACE_ROOT:?}
 
   console:
-    image: ${QQ_CONSOLE_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-console:${QQ_TAG:-v0.7.0}}
+    image: ${QQ_CONSOLE_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-console:${QQ_TAG:-v0.7.2}}
     container_name: qqbot-console
     user: "${QQ_UID:-1000}:${QQ_GID:-1000}"
+    group_add:
+      - "${QQ_DOCKER_GID:-1000}"
     network_mode: host
     restart: unless-stopped
     # 故意不 depends_on harness：DSH 起不来时控制台也要能用
@@ -85,6 +105,9 @@ services:
       QQ_NAPCAT_CONFIG_DIR: /data/qqbot/napcat-config
       QQ_DSH_PORT: ${QQ_DSH_PORT:-3081}          # 控制台探活用
       QQ_VERSION: ${QQ_TAG:-v1}
+      # 「系统配置」页要用：判断工作区是否在可写范围内
+      QQ_WORKSPACE: ${QQ_WORKSPACE:-}
+      QQ_WORKSPACE_ROOT: ${QQ_WORKSPACE_ROOT:-}
     volumes:
       - ${QQ_DATA_ROOT:?请在 .env 设置 QQ_DATA_ROOT}:/data/qqbot
       - ${QQ_DSH_HOME:?请在 .env 设置 QQ_DSH_HOME}:/data/dsh

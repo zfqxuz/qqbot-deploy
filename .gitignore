@@ -1,5 +1,8 @@
-# 本机配置与备份都不入库
+# 本机配置与构建产物都不入库
 .env
 .env.local
 dsh.env
-backups/
+
+# 老部署兼容（仅用于从 systemd 老部署迁移；本机保留，不进仓库）
+docker-compose.legacy-compat.yml
+build-context/
