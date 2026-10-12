@@ -12,10 +12,15 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 PKG_ROOT=$(cd "$HERE/../.." && pwd)
 command -v rpmbuild >/dev/null || { echo "[rpm] 需要 rpmbuild（apt install rpm / dnf install rpm-build）"; exit 1; }
 
+# RPM 的 Version 字段不允许 "-"（CI 实测报错：Illegal char '-' in: Version: 0.7.3-dev）。
+# 用 "~" 替代：在 RPM 里 ~ 表示预发布，排序上小于正式版，语义正好对（0.7.3~dev < 0.7.3）。
+SAFEVER=${VER//-/~}
+echo "[rpm] 版本：$VER → RPM 版本 $SAFEVER"
+
 TOP=$(mktemp -d)
 trap 'rm -rf "$TOP"' EXIT
 mkdir -p "$TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS} "$OUT"
-APPDIR="$TOP/qqbot-deploy-$VER"
+APPDIR="$TOP/qqbot-deploy-$SAFEVER"
 mkdir -p "$APPDIR/opt/qqbot-deploy" "$APPDIR/usr/bin"
 
 echo "[rpm] 1/3 拷贝部署包"
@@ -37,10 +42,10 @@ SH
 done
 
 echo "[rpm] 3/3 rpmbuild"
-tar -C "$TOP" -czf "$TOP/SOURCES/qqbot-deploy-$VER.tar.gz" "qqbot-deploy-$VER"
+tar -C "$TOP" -czf "$TOP/SOURCES/qqbot-deploy-$SAFEVER.tar.gz" "qqbot-deploy-$SAFEVER"
 cat > "$TOP/SPECS/qqbot-deploy.spec" <<SPEC
 Name:           qqbot-deploy
-Version:        $VER
+Version:        $SAFEVER
 Release:        1%{?dist}
 Summary:        QQ bot deploy kit for DeepSeek Harness (installer only)
 License:        MIT
@@ -80,7 +85,7 @@ cat <<'MSG'
 MSG
 
 %changelog
-* $(date '+%a %b %d %Y') zfqxuz <zfqxuz@users.noreply.github.com> - $VER-1
+* $(date '+%a %b %d %Y') zfqxuz <zfqxuz@users.noreply.github.com> - $SAFEVER-1
 - installer-only package
 SPEC
 
