@@ -41,6 +41,17 @@ jobs:
           n=0
           while IFS= read -r -d '' f; do bash -n "$f"; n=$((n+1)); done < <(find . -name '*.sh' -not -path './.git/*' -print0)
           echo "bash -n 通过：$n 个脚本"
+      - name: PowerShell / Inno 脚本必须带 UTF-8 BOM
+        run: |
+          set -e
+          bad=0
+          while IFS= read -r -d '' f; do
+            if ! head -c 3 "$f" | od -An -tx1 | tr -d ' \n' | grep -q '^efbbbf$'; then
+              echo "::error file=$f::缺 UTF-8 BOM —— Windows PowerShell 5.1 会按 ANSI 读，中文变乱码并让脚本解析失败（2026-10-12 用户实测踩到）"
+              bad=1
+            fi
+          done < <(find . \( -name '*.ps1' -o -name '*.iss' \) -not -path './.git/*' -print0)
+          [ "$bad" = 0 ] && echo "BOM 检查通过"
       - name: 所有 mjs 脚本语法检查
         run: |
           set -e
@@ -84,6 +95,20 @@ jobs:
                      'dsh-web-run.mjs','install-wizard.html','install-wizard.py','host','.env.example')
           foreach ($i in $items) { if (Test-Path $i) { Copy-Item -Recurse -Force $i $dst } }
           Get-ChildItem $dst | Select-Object Name | Format-Table
+      - name: 用 Windows PowerShell 5.1 解析所有 .ps1（复现用户实际的解码方式）
+        shell: powershell
+        run: |
+          $bad = 0
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) {
+              Write-Host "::error file=$($_.FullName)::PowerShell 5.1 解析失败"
+              $errs | ForEach-Object { Write-Host ("  行{0} 列{1}: {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message) }
+              $bad = 1
+            } else { Write-Host "parse OK (PS 5.1): $($_.Name)" }
+          }
+          if ($bad -ne 0) { exit 1 }
       - name: 装 Inno Setup 6
         shell: pwsh
         run: choco install innosetup -y --no-progress

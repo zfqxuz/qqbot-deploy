@@ -1,4 +1,4 @@
-# install-host.ps1 —— Windows 上的"不用 Docker"安装
+﻿# install-host.ps1 —— Windows 上的"不用 Docker"安装
 #
 # 做什么：按分层装 Node（缺则用 winget）→ 按分层装 dsh → 拉桥接/插件源码 → 用 junction 接进 DSH home
 #         → 写环境变量 → 建开机自启的计划任务 → 打印 NapCat 官方安装步骤与验证命令
