@@ -60,13 +60,36 @@ function Die($m) {
 }
 
 # ---------- 0.5) 找不到就找常见安装位置（PATH 没生效也能救）----------
+# [fix 2026-10-12] 用户实测：Test-Path 在某个环境变量拼出来的候选路径上抛
+#   "ArgumentException: 路径中具有非法字符"，而 $ErrorActionPreference='Stop' 会让整个脚本就此终止。
+# 现在一律用 .NET 的 File/Directory 存在性检查（不经过 PowerShell 的 provider 与通配符解析），
+# 并且逐个 try/catch —— 探测失败最多是"没找到"，绝不让安装中断。
+function Test-FileExists([string]$path) {
+  if (-not $path) { return $false }
+  try { return [System.IO.File]::Exists($path) } catch { return $false }
+}
+function Test-DirExists([string]$path) {
+  if (-not $path) { return $false }
+  try { return [System.IO.Directory]::Exists($path) } catch { return $false }
+}
 function Find-Exe([string]$name, [string[]]$extraDirs) {
   $c = Get-Command $name -ErrorAction SilentlyContinue
   if ($c) { return $c.Source }
-  $cands = @()
-  foreach ($d in $extraDirs) { if ($d) { $cands += (Join-Path $d $name); $cands += (Join-Path $d "$name.cmd"); $cands += (Join-Path $d "$name.exe") } }
-  foreach ($p in $cands) { if ($p -and (Test-Path $p)) { return $p } }
+  foreach ($d in $extraDirs) {
+    if (-not $d) { continue }
+    $base = ([string]$d).Trim().TrimEnd('\', '/')
+    if (-not $base) { continue }
+    foreach ($leaf in @($name, "$name.cmd", "$name.exe")) {
+      $cand = $base + '\' + $leaf
+      if (Test-FileExists $cand) { return $cand }
+    }
+  }
   return $null
+}
+function Get-ExistingDirs([string[]]$dirs) {
+  $out = @()
+  foreach ($d in $dirs) { if ($d -and (Test-DirExists ([string]$d).Trim())) { $out += ([string]$d).Trim() } }
+  return $out
 }
 $nodeDirs = @(
   (Join-Path $env:ProgramFiles 'nodejs'),
@@ -138,11 +161,11 @@ if (-not $nodeOk) {
     & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
   }
   # 新装的 Node 目录可能排在旧 v16 后面 → 显式前置，再重新解析
-  $freshDirs = @(
+  $freshDirs = Get-ExistingDirs @(
     (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
     (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
     (Join-Path $env:ProgramFiles 'nodejs')
-  ) | Where-Object { $_ -and (Test-Path $_) }
+  )
   if ($freshDirs) { $env:Path = (($freshDirs | Select-Object -Unique) -join ';') + ';' + $env:Path }
   Resolve-NodeState
   if (-not $nodeOk) {
@@ -158,7 +181,7 @@ if (-not $nodeOk) {
 if ($npmPath) {
   try {
     $npmPrefix = (& $npmPath prefix -g 2>$null | Select-Object -First 1)
-    if ($npmPrefix -and (Test-Path $npmPrefix) -and ($env:Path -notlike "*$npmPrefix*")) {
+    if ((Test-DirExists ([string]$npmPrefix).Trim()) -and ($env:Path -notlike "*$npmPrefix*")) {
       $env:Path = "$npmPrefix;$env:Path"
       Say "PATH 前置 npm 全局目录：$npmPrefix"
     }
@@ -267,24 +290,13 @@ node "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh)
 } else { Warn '按参数跳过自启' }
 
 Write-Host ''
-Write-Host '============================================================'
-Write-Host ' 接下来（Windows）'
-Write-Host '============================================================'
-Write-Host '  1) 装协议端 NapCat（官方一键包，交互式，必须人工点）：'
-Write-Host '     下载 NapCat.Shell.Windows.OneKey.zip（https://napneko.github.io/guide/boot/Shell 里的 Windows 一键安装）'
-Write-Host '     解压后运行 NapCatInstaller.exe，完成后启动一次扫码登录'
-Write-Host '     NapCat 的 OneBot11 反向 WS 目标填： ws://127.0.0.1:6700'
-Write-Host '  2) 起宿主：schtasks /Run /TN qqbot-dsh-web'
-Write-Host ('  3) 开网页向导： http://127.0.0.1:{0}/setup' -f $ConsolePort)
+Write-Host '下一步：装 NapCat（官方一键包，人工点）'
+Write-Host '  https://napneko.github.io/guide/boot/Shell → NapCat.Shell.Windows.OneKey.zip → NapCatInstaller.exe'
+Write-Host '  NapCat 里 OneBot11 反向 WS 填 ws://127.0.0.1:6700，然后扫码登录'
 Write-Host ''
-Write-Host '  验证：'
-Write-Host ('    Get-NetTCPConnection -LocalPort 6700 -State Listen   # 桥接')
-Write-Host ('    (Invoke-WebRequest http://127.0.0.1:{0}/login).StatusCode   # 控制台 → 200' -f $ConsolePort)
-Write-Host '    Get-Process node | Select-Object Id,Path              # dsh / 控制台进程'
-Write-Host ''
-Write-Host '  回退：schtasks /Delete /TN qqbot-dsh-web /F'
+Write-Host ("控制台：http://127.0.0.1:{0}/setup" -f $ConsolePort)
+Write-Host '起宿主：schtasks /Run /TN qqbot-dsh-web    停：schtasks /End /TN qqbot-dsh-web'
+Write-Host '卸载：开始菜单 → 卸载（保留数据）'
 Stop-Log
-if ($LogFile) { Write-Host "[host] 本次日志：$LogFile" }
+if ($LogFile) { Write-Host ''; Write-Host "日志：$LogFile" }
 Pause-Here
-Write-Host '        Remove-Item (Join-Path $DshHome ''plugins'') -Recurse -Force'
-Write-Host '============================================================'

@@ -18,7 +18,7 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
-#define AppName "QQ 机器人（DSH + OneBot 桥接）"
+#define AppName "QQ 机器人"
 #define AppPublisher "zfqxuz"
 #define AppURL "https://github.com/zfqxuz/qqbot-deploy"
 #define PayloadDir "payload"
@@ -46,7 +46,12 @@ UninstallDisplayName={#AppName}
 ShowLanguageDialog=no
 
 [Languages]
+; 有中文语言包就用中文（CI 会在编译前下载）；没有就退回 Inno 自带的英文对话框
+#if FileExists(AddBackslash(SourcePath) + "ChineseSimplified.isl")
+Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
+#else
 Name: "chinese"; MessagesFile: "compiler:Default.isl"
+#endif
 
 [Files]
 ; 整个部署包（payload\ 由 CI 从 deploy/qqbot 拷过来）
@@ -56,7 +61,7 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 ; 主入口：直接跑宿主安装器（分层判断，已有 Node/dsh 不动）；不开控制台向导是为了不依赖 WSL
 Name: "{group}\重新安装或修复（不用 Docker）"; Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"""; \
-  WorkingDir: "{app}"; Comment: "装完会自动跑；这个入口用于以后重装/修复（分层：已有 Node/dsh 不会重装）"
+  WorkingDir: "{app}"
 Name: "{group}\先体检（什么都不改）"; Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"" -Check"; WorkingDir: "{app}"
 Name: "{group}\更新"; Filename: "powershell.exe"; \
@@ -72,21 +77,21 @@ Name: "{group}\更新与卸载（UPDATE-UNINSTALL.md）"; Filename: "{app}\UPDAT
 ;      结束/报错都停住等回车 —— 窗口不会一闪而过。
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1""{code:GetQQArg}"; \
-  WorkingDir: "{app}"; StatusMsg: "正在安装（Node / dsh / 插件 / 自启）…"; \
+  WorkingDir: "{app}"; StatusMsg: "正在安装…"; \
   Flags: runascurrentuser nowait skipifsilent
 
 ; ---- 可选：装完再跑一次只读体检（默认不勾；排查问题用）----
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"" -Check"; \
-  Description: "再跑一次只读体检（什么都不改）"; Flags: postinstall nowait skipifsilent unchecked
+  Description: "安装后做一次环境检查"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
 ; 只删程序目录；数据在 %USERPROFILE%\qqbot 与 %USERPROFILE%\.dsh，卸载器不碰
 Type: filesandordirs; Name: "{app}\build-context"
 
 [Messages]
-chinese.WelcomeLabel2=即将安装 %1。%n%n它会放好安装脚本与文档，不会自动启服务、不会碰你的数据；装完在开始菜单里点"安装 QQ 机器人（不用 Docker）"再开始。
-chinese.FinishedLabel=文件已就位，安装脚本正在一个控制台窗口里继续装（Node / dsh / 插件 / 自启）。%n%n那个窗口会停住等你按回车，报错也在里面；完整日志：%n%USERPROFILE%\qqbot\install-log-*.txt%n%n如果窗口已经关了或没出现：开始菜单 → "重新安装 / 修复"，或在本目录运行%n  powershell -ExecutionPolicy Bypass -File host\install-host.ps1 -Check%n%n注意：本安装包未做代码签名，Windows 可能提示"未知发布者"。
+chinese.WelcomeLabel2=即将安装 %1。%n%n向导结束后会自动开始安装。
+chinese.FinishedLabel=安装完成。安装脚本已在新窗口运行，结束后按回车关闭。%n%n日志：%USERPROFILE%\qqbot\install-log-*.txt
 
 [Code]
 var
@@ -108,11 +113,8 @@ end;
 
 procedure InitializeWizard;
 begin
-  QQPage := CreateInputQueryPage(wpSelectDir,
-    '机器人 QQ 号（可以留空）',
-    '这一项会直接传给安装脚本',
-    '填机器人登录用的小号（纯数字）。留空也行：稍后在控制台页面里配，或重跑开始菜单里的"重新安装 / 修复"。');
-  QQPage.Add('机器人 QQ 号：', False);
+  QQPage := CreateInputQueryPage(wpSelectDir, '机器人 QQ 号', '', '');
+  QQPage.Add('QQ 号（可留空）', False);
 end;
 
 function GetQQArg(Param: String): String;

@@ -124,6 +124,14 @@ jobs:
             } else { Write-Host "parse OK (PS 5.1): $($_.Name)" }
           }
           if ($bad -ne 0) { exit 1 }
+      - name: 取中文语言包（失败就退回英文标准对话框，不阻断）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          try {
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation/main/ChineseSimplified.isl' -OutFile 'packaging\windows\ChineseSimplified.isl'
+            Write-Host '中文语言包已就位'
+          } catch { Write-Host "取中文语言包失败（将使用英文对话框）：$($_.Exception.Message)" }
       - name: 装 Inno Setup 6
         shell: pwsh
         run: choco install innosetup -y --no-progress
