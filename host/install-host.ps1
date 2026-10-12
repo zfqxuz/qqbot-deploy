@@ -389,7 +389,9 @@ cd /d "$Workspace"
 "$nodePath" "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh) { (Get-Command dsh).Source } else { 'dsh' })" web --no-open --port $Port
 "@ | Set-Content -Encoding ASCII $runner
   Say "写启动器 $runner"
-  $null = Invoke-Native 'schtasks' @('/Create', '/TN', 'qqbot-dsh-web', '/SC', 'ONLOGON', '/TR', "cmd /c \"$runner\"", '/F') -Quiet
+  # 注意：PowerShell 里没有 \" 转义，/TR 的值用拼接构造成 cmd /c "<路径>"
+  $trDsh = 'cmd /c "' + $runner + '"'
+  $null = Invoke-Native 'schtasks' @('/Create', '/TN', 'qqbot-dsh-web', '/SC', 'ONLOGON', '/TR', $trDsh, '/F') -Quiet
   Say '计划任务 qqbot-dsh-web 已创建（登录时自动起）'
 
   # 控制台（127.0.0.1:8798）：Docker 里它是独立容器、Linux 是 systemd 单元，Windows 原先漏了这个入口 ——
@@ -405,7 +407,8 @@ cd /d "$Workspace"
 "$nodePath" "$consoleJs" --port $ConsolePort --data-root "$DataRoot"
 "@ | Set-Content -Encoding ASCII $consoleRunner
     Say "写控制台启动器 $consoleRunner"
-    $null = Invoke-Native 'schtasks' @('/Create', '/TN', 'qqbot-console', '/SC', 'ONLOGON', '/TR', "cmd /c \"$consoleRunner\"", '/F') -Quiet
+    $trConsole = 'cmd /c "' + $consoleRunner + '"'
+    $null = Invoke-Native 'schtasks' @('/Create', '/TN', 'qqbot-console', '/SC', 'ONLOGON', '/TR', $trConsole, '/F') -Quiet
     Say '计划任务 qqbot-console 已创建（登录时自动起）'
   } else {
     Warn "找不到 $consoleJs：跳过控制台自启（控制台可手工跑）"
