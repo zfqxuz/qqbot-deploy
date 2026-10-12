@@ -94,8 +94,7 @@ function Get-ExistingDirs([string[]]$dirs) {
 $nodeDirs = @(
   (Join-Path $env:ProgramFiles 'nodejs'),
   $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'nodejs' }),
-  (Join-Path $env:LOCALAPPDATA 'Programs
-odejs'),
+  (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
   (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
   (Join-Path $env:APPDATA 'nvm\current')
 )
@@ -103,6 +102,51 @@ $npmDirs = $nodeDirs + @((Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAP
 $foundExe = @((Find-Exe 'node' $nodeDirs), (Find-Exe 'npm' $npmDirs), (Find-Exe 'dsh' $npmDirs))
 $foundDirs = @($foundExe | Where-Object { $_ } | ForEach-Object { Split-Path -Parent $_ } | Select-Object -Unique)
 if ($foundDirs.Count -gt 0) { $env:Path = ($foundDirs -join ';') + ';' + $env:Path }
+
+# [fix 2026-10-12] node/npm 的统一解析：**按版本挑最高的那份，不看 PATH 顺序**
+#   为什么必须这样：Windows 的 PATH = 系统 PATH + 用户 PATH（系统在前），所以 winget 装到
+#   用户作用域的 Node 24 永远被 C:\Program Files\nodejs 里的旧 Node（v16/v20）压住。
+#   旧实现在 PATH 上找 node → 装完 Node 24 仍然解析成 v20 → 脚本自己 Die（真机 2026-10-12 踩到）。
+#   现在把候选目录逐个看，拿版本号决胜；后面所有调用（npm 安装、启动器）都用解析出来的绝对路径。
+function Resolve-NodeState {
+  $best = $null; $bestV = $null
+  $cands = @()
+  foreach ($d in $nodeDirs) {
+    if (-not $d) { continue }
+    $base = ([string]$d).Trim().TrimEnd('\', '/')
+    if (-not $base) { continue }
+    foreach ($leaf in @('node.exe', 'node')) {
+      $p = $base + '\' + $leaf
+      if (Test-FileExists $p) { $cands += $p }
+    }
+  }
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($cmd) { $cands += $cmd.Source }
+  foreach ($p in ($cands | Select-Object -Unique)) {
+    try { $v = (& $p -v) } catch { continue }
+    if ($v -notmatch '^v(\d+)\.(\d+)\.(\d+)') { continue }
+    $key = [version]$v.TrimStart('v')
+    if ((-not $bestV) -or ($key -gt $bestV)) { $bestV = $key; $best = $p }
+  }
+  $script:nodePath = $best
+  $script:node = if ($best) { [pscustomobject]@{ Source = $best } } else { $null }
+  $script:nodeV = if ($best) { (& $best -v) } else { '无' }
+  $script:nodeOk = $false
+  if ($script:nodeV -match '^v(\d+)\.(\d+)') {
+    $script:nodeOk = ([int]$Matches[1] -gt 22) -or ([int]$Matches[1] -eq 22 -and [int]$Matches[2] -ge 13)
+  }
+  # npm 跟 node 同目录（同一个安装里必带），找不到再退回原来的搜法
+  $script:npmPath = $null
+  if ($best) {
+    $dir = Split-Path -Parent $best
+    foreach ($leaf in @('npm.cmd', 'npm')) {
+      $p = Join-Path $dir $leaf
+      if (Test-FileExists $p) { $script:npmPath = $p; Break }
+    }
+  }
+  if (-not $script:npmPath) { $script:npmPath = Find-Exe 'npm' $npmDirs }
+  $script:npm = if ($script:npmPath) { [pscustomobject]@{ Source = $script:npmPath } } else { $null }
+}
 
 $DshHome   = if ($env:DSH_HOME) { $env:DSH_HOME } else { "$env:USERPROFILE\.dsh" }
 $SrcDir    = Join-Path $DataRoot 'src'
@@ -115,13 +159,9 @@ Write-Host ''
 Write-Host '============================================================'
 Write-Host ' Windows · 不用 Docker 的安装 · 体检'
 Write-Host '============================================================'
-$node = Get-Command node -ErrorAction SilentlyContinue
-$npm  = Get-Command npm  -ErrorAction SilentlyContinue
 $git  = Get-Command git  -ErrorAction SilentlyContinue
-$nodeV = if ($node) { (& node -v) } else { '无' }
-# [fix 2026-10-12] 门槛是 ≥22.13：插件静态 import 'node:sqlite'（20.x 直接抛错，22.5~22.12 要 flag）
-$nodeOk = $false
-if ($nodeV -match '^v(\d+)\.(\d+)') { $nodeOk = ([int]$Matches[1] -gt 22) -or ([int]$Matches[1] -eq 22 -and [int]$Matches[2] -ge 13) }
+# node/npm：按版本挑最高的那份（门槛 ≥22.13，插件静态 import 'node:sqlite'）
+Resolve-NodeState
 Write-Host ("  node           : {0} {1}" -f $nodeV, $(if ($nodeOk) { '（≥22.13 够用）' } else { '（缺/太旧：需要 ≥22.13 → 用 winget 装）' }))
 Write-Host ("  npm / git      : {0} / {1}" -f [bool]$npm, [bool]$git)
 Write-Host ("  dsh            : {0}" -f $(if (Get-Command dsh -ErrorAction SilentlyContinue) { "$(& dsh --version)（在，默认不动）" } else { '没有 → 会装' }))
@@ -133,20 +173,6 @@ Write-Host '============================================================'
 if ($Check) { Say '只体检（-Check）：什么都没改'; if ($LogFile) { Say "本次日志：$LogFile" }; Stop-Log; Pause-Here; exit 0 }
 
 # 1) Node（缺或太旧 → winget 装；装完必须**重新解析**，否则会继续用旧的 v16）
-function Resolve-NodeState {
-  $np = Find-Exe 'node' $nodeDirs
-  $mp = Find-Exe 'npm'  $npmDirs
-  $script:nodePath = $np
-  $script:npmPath  = $mp
-  # 后面别处用 $node.Source / $npm.Source，这里包一层保持形状一致
-  $script:node = if ($np) { [pscustomobject]@{ Source = $np } } else { $null }
-  $script:npm  = if ($mp) { [pscustomobject]@{ Source = $mp } } else { $null }
-  $script:nodeV = if ($np) { (& $np -v) } else { '无' }
-  $script:nodeOk = $false
-  if ($script:nodeV -match '^v(\d+)\.(\d+)') {
-    $script:nodeOk = ([int]$Matches[1] -gt 22) -or ([int]$Matches[1] -eq 22 -and [int]$Matches[2] -ge 13)
-  }
-}
 if (-not $nodeOk) {
   # 兜底：不依赖 winget、也不需要管理员 —— 下官方 zip 解到 %LOCALAPPDATA%\Programs\nodejs
   function Install-NodeFromZip {
@@ -195,6 +221,13 @@ if (-not $nodeOk) {
   )
   if ($freshDirs) { $env:Path = (($freshDirs | Select-Object -Unique) -join ';') + ';' + $env:Path }
   Resolve-NodeState
+  if ($nodeOk) {
+    $pathNode = (Get-Command node -ErrorAction SilentlyContinue).Source
+    if ($pathNode -and ($pathNode -ne $nodePath)) {
+      Warn "PATH 里的 node 仍是旧版：$pathNode（本次安装一律用 $nodePath，$nodeV —— 启动器里写的就是绝对路径）"
+      Warn '想让命令行也用它：把旧 Node 目录从系统 PATH 里去掉，或卸载旧版 Node（控制台/设置 → 应用）'
+    }
+  }
   if (-not $nodeOk) {
     Die "装完 node 还是 $nodeV（需要 ≥22.13）。多半是旧 Node 排在 PATH 前面：
       · 现在用的是 $nodePath
@@ -243,7 +276,7 @@ if ($needDsh) {
   if (-not $npmPath) { Die '没有 npm：先装好 Node ≥22.13 再重跑（见上面 node 那一节）' }
   $dshSpec = if ($DshVersion) { "@$DshVersion" } else { '' }
   Say "安装 @deepseek-ai/dsh$dshSpec（$dshWhy）"
-  & npm install -g --no-fund --no-audit "@deepseek-ai/dsh$dshSpec"
+  & $npmPath install -g --no-fund --no-audit "@deepseek-ai/dsh$dshSpec"
   $dshCmd = Get-Command dsh -ErrorAction SilentlyContinue
   if (-not $dshCmd) { Die '装完找不到 dsh：npm 全局 bin 不在 PATH（npm prefix -g 看看，并把它的 bin 目录加进 PATH）' }
   $dshNow = ((& dsh --version) -replace '\s', '')
@@ -332,7 +365,7 @@ if (-not $NoAutostart) {
 set QQ_DATA_ROOT=$DataRoot
 set DSH_HOME=$DshHome
 cd /d "$Workspace"
-node "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh) { (Get-Command dsh).Source } else { 'dsh' })" web --no-open --port $Port
+"$nodePath" "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh) { (Get-Command dsh).Source } else { 'dsh' })" web --no-open --port $Port
 "@ | Set-Content -Encoding ASCII $runner
   Say "写启动器 $runner"
   schtasks /Create /TN 'qqbot-dsh-web' /SC ONLOGON /TR "cmd /c \"$runner\"" /F | Out-Null
@@ -348,7 +381,7 @@ node "$runnerJs" --port $Port --data-root "$DataRoot" -- "$(if (Get-Command dsh)
 set QQ_DATA_ROOT=$DataRoot
 set DSH_HOME=$DshHome
 cd /d "$Workspace"
-node "$consoleJs" --port $ConsolePort --data-root "$DataRoot"
+"$nodePath" "$consoleJs" --port $ConsolePort --data-root "$DataRoot"
 "@ | Set-Content -Encoding ASCII $consoleRunner
     Say "写控制台启动器 $consoleRunner"
     schtasks /Create /TN 'qqbot-console' /SC ONLOGON /TR "cmd /c \"$consoleRunner\"" /F | Out-Null
