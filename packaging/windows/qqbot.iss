@@ -54,7 +54,7 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 ; 主入口：直接跑宿主安装器（分层判断，已有 Node/dsh 不动）；不开控制台向导是为了不依赖 WSL
-Name: "{group}\重新安装 / 修复（不用 Docker）"; Filename: "powershell.exe"; \
+Name: "{group}\重新安装或修复（不用 Docker）"; Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1"""; \
   WorkingDir: "{app}"; Comment: "装完会自动跑；这个入口用于以后重装/修复（分层：已有 Node/dsh 不会重装）"
 Name: "{group}\先体检（什么都不改）"; Filename: "powershell.exe"; \
@@ -73,7 +73,7 @@ Name: "{group}\更新与卸载（UPDATE-UNINSTALL.md）"; Filename: "{app}\UPDAT
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\host\install-host.ps1""{code:GetQQArg}"; \
   WorkingDir: "{app}"; StatusMsg: "正在安装（Node / dsh / 插件 / 自启）…"; \
-  Flags: runascurrentuser nowait
+  Flags: runascurrentuser nowait skipifsilent
 
 ; ---- 可选：装完再跑一次只读体检（默认不勾；排查问题用）----
 Filename: "powershell.exe"; \

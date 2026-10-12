@@ -52,6 +52,21 @@ jobs:
             fi
           done < <(find . \( -name '*.ps1' -o -name '*.iss' \) -not -path './.git/*' -print0)
           [ "$bad" = 0 ] && echo "BOM 检查通过"
+      - name: Inno 快捷方式名里不许有 Windows 非法字符
+        run: |
+          set -e
+          bad=0
+          # 名字部分（{group}\ 之后）不允许 / \ : * ? " < > | —— 带 "/" 会被 Windows 当子目录，
+          # 安装时直接失败：IPersistFile::Save failed; code 0x80070003（2026-10-12 实测踩到）
+          while IFS= read -r line; do
+            name=$(printf '%s' "$line" | grep -oE 'Name: "\{group\}\\[^"]*"' | sed 's/^Name: "{group}\\//; s/"$//')
+            [ -n "$name" ] || continue
+            case "$name" in
+              */*|*\\*|*:*|*\**|*\?*|*\"*|*\<*|*\>*|*\|*)
+                echo "::error::快捷方式名含 Windows 非法字符：$name"; bad=1 ;;
+            esac
+          done < packaging/windows/qqbot.iss
+          [ "$bad" = 0 ] && echo "快捷方式名检查通过"
       - name: 所有 mjs 脚本语法检查
         run: |
           set -e
@@ -122,6 +137,25 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "packaging\windows\Output\*.exe" dist -Force
           Get-ChildItem dist | Format-Table Name, Length
+      - name: 冒烟测试：静默装一遍再卸掉（抓"只有安装时才暴露"的错）
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem dist\*.exe | Select-Object -First 1).FullName
+          $dir = Join-Path $env:RUNNER_TEMP 'qqbot-smoke'
+          Write-Host "安装到 $dir"
+          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir")
+          Write-Host "安装器退出码：$($p.ExitCode)"
+          foreach ($f in @('host\install-host.ps1','host\uninstall-host.ps1','update.sh','UPDATE-UNINSTALL.md')) {
+            if (-not (Test-Path (Join-Path $dir $f))) { Write-Host "::error::安装后缺少 $f"; exit 1 }
+            Write-Host "在：$f"
+          }
+          # 开始菜单快捷方式（这一步以前炸过：名字里带 "/" → 0x80070003）
+          $lnk = Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*重新安装*' }
+          if (-not $lnk) { Write-Host '::error::没找到开始菜单快捷方式（快捷方式创建失败过）'; exit 1 }
+          Write-Host "快捷方式：$($lnk.FullName)"
+          $un = Join-Path $dir 'unins000.exe'
+          if (Test-Path $un) { Start-Process -Wait -FilePath $un -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') }
+          Write-Host '冒烟测试通过'
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
