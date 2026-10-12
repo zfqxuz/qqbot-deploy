@@ -109,16 +109,60 @@ Write-Host ("  6700 桥接端口  : {0}" -f $(if ($p6700) { '被占用（有协�
 Write-Host '============================================================'
 if ($Check) { Say '只体检（-Check）：什么都没改'; if ($LogFile) { Say "本次日志：$LogFile" }; Stop-Log; Pause-Here; exit 0 }
 
-# 1) Node
-if (-not $nodeOk) {
-  if (Get-Command winget -ErrorAction SilentlyContinue) {
-    Say '用 winget 装 Node LTS（用户作用域，不要求管理员）'
-    winget install --id OpenJS.NodeJS.LTS --scope user --accept-source-agreements --accept-package-agreements
-    Warn '装完可能需要重开一个 PowerShell 让 PATH 生效，然后重跑本脚本'
-  } else {
-    Warn '没有 node 也没有 winget：去 https://nodejs.org 装 LTS（勾选 Add to PATH），再重跑本脚本'
-    exit 2
+# 1) Node（缺或太旧 → winget 装；装完必须**重新解析**，否则会继续用旧的 v16）
+function Resolve-NodeState {
+  $np = Find-Exe 'node' $nodeDirs
+  $mp = Find-Exe 'npm'  $npmDirs
+  $script:nodePath = $np
+  $script:npmPath  = $mp
+  # 后面别处用 $node.Source / $npm.Source，这里包一层保持形状一致
+  $script:node = if ($np) { [pscustomobject]@{ Source = $np } } else { $null }
+  $script:npm  = if ($mp) { [pscustomobject]@{ Source = $mp } } else { $null }
+  $script:nodeV = if ($np) { (& $np -v) } else { '无' }
+  $script:nodeOk = $false
+  if ($script:nodeV -match '^v(\d+)\.(\d+)') {
+    $script:nodeOk = ([int]$Matches[1] -gt 22) -or ([int]$Matches[1] -eq 22 -and [int]$Matches[2] -ge 13)
   }
+}
+if (-not $nodeOk) {
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    Die "node 是 $nodeV（需要 ≥22.13），而这台机器上没有 winget。两条路：
+      1) 去 https://nodejs.org 下 LTS 的 .msi 装上（安装时勾 Add to PATH），再重跑本脚本
+      2) 从 Microsoft Store 装「应用安装程序」拿到 winget，再重跑本脚本"
+  }
+  Say "node 是 $nodeV（需要 ≥22.13）→ 用 winget 装 Node LTS"
+  # 先试用户作用域（不需要管理员）；Node 的 winget 包不一定支持 --scope user，失败就回退默认作用域（可能弹 UAC）
+  & winget install --id OpenJS.NodeJS.LTS --scope user --accept-source-agreements --accept-package-agreements
+  if ($LASTEXITCODE -ne 0) {
+    Warn "用户作用域安装失败（winget 退出码 $LASTEXITCODE）→ 改试默认作用域（可能弹管理员确认）"
+    & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+  }
+  # 新装的 Node 目录可能排在旧 v16 后面 → 显式前置，再重新解析
+  $freshDirs = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
+    (Join-Path $env:ProgramFiles 'nodejs')
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  if ($freshDirs) { $env:Path = (($freshDirs | Select-Object -Unique) -join ';') + ';' + $env:Path }
+  Resolve-NodeState
+  if (-not $nodeOk) {
+    Die "装完 node 还是 $nodeV（需要 ≥22.13）。多半是旧 Node 排在 PATH 前面：
+      · 现在用的是 $nodePath
+      · 把上面那个目录从用户/系统 PATH 里删掉，或先卸载旧版 Node，然后重跑本脚本
+      · 验证：新开一个 PowerShell，node -v 应该 ≥ v22.13"
+  }
+  Say "node 就绪：$nodeV（$nodePath）"
+}
+
+# 1.5) 把 npm 全局 bin 目录前置：`npm i -g` 装的 dsh 落在那里，本会话的 PATH 里可能还没有
+if ($npmPath) {
+  try {
+    $npmPrefix = (& $npmPath prefix -g 2>$null | Select-Object -First 1)
+    if ($npmPrefix -and (Test-Path $npmPrefix) -and ($env:Path -notlike "*$npmPrefix*")) {
+      $env:Path = "$npmPrefix;$env:Path"
+      Say "PATH 前置 npm 全局目录：$npmPrefix"
+    }
+  } catch { }
 }
 
 # 2) dsh（分层：有就不动，缺才装，点名才换）
@@ -142,7 +186,7 @@ if ($SkipDsh) {
   $dshWhy = "已有 dsh $dshNow，跳过（要升级：-UpgradeDsh）"
 }
 if ($needDsh) {
-  if (-not $npm) { Die '没有 npm：先装好 Node ≥20 再重跑' }
+  if (-not $npmPath) { Die '没有 npm：先装好 Node ≥22.13 再重跑（见上面 node 那一节）' }
   $dshSpec = if ($DshVersion) { "@$DshVersion" } else { '' }
   Say "安装 @deepseek-ai/dsh$dshSpec（$dshWhy）"
   & npm install -g --no-fund --no-audit "@deepseek-ai/dsh$dshSpec"
