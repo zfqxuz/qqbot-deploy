@@ -152,9 +152,9 @@ var
   Params, QQ: String;
   Rc: Integer;
 begin
-  { Inno 没有 {userprofile} 常量（2026-10-12 真机报 Unknown constant），
-    取环境变量要用 {%NAME}；另外 %USERPROFILE%\qqbot 在全新机器上还不存在，
-    不先建目录的话重定向会失败（安装脚本跑不起来）。 }
+  { Inno 没有 userprofile 这个常量（2026-10-12 真机报 Unknown constant "userprofile"）：
+    取环境变量要用百分号写法，例如 %USERPROFILE%；另外注意 %USERPROFILE%\qqbot 在全新机器上
+    还不存在，不先建目录的话重定向会失败、安装脚本压根起不来。 }
   LogHome := ExpandConstant('{%USERPROFILE}');
   if LogHome = '' then LogHome := ExpandConstant('{%TEMP}');
   LogHome := LogHome + '\qqbot';
