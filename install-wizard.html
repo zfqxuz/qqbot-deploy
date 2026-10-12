@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QQ 机器人安装向导</title>
+<style>
+  :root { --bg:#0f1216; --card:#161b22; --line:#243040; --fg:#e8ecf1; --sub:#9aa7b8;
+          --acc:#4c8dff; --ok:#31c48d; --warn:#d29922; --bad:#f0616d; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif }
+  .wrap { max-width:960px; margin:0 auto; padding:28px 20px 80px }
+  h1 { font-size:22px; margin:0 0 4px }
+  .sub { color:var(--sub); font-size:13px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin-top:16px }
+  .card h2 { font-size:16px; margin:0 0 8px }
+  .num { display:inline-flex; width:24px; height:24px; border-radius:50%; align-items:center; justify-content:center;
+         font-size:13px; font-weight:600; background:rgba(76,141,255,.14); color:#8fb6ff; border:1px solid rgba(76,141,255,.35); margin-right:8px }
+  .opt { display:flex; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; margin-top:8px; cursor:pointer }
+  .opt:hover { border-color:var(--acc) }
+  .opt.sel { border-color:var(--acc); background:rgba(76,141,255,.07) }
+  .opt input { margin-top:4px }
+  .opt b { font-weight:600 }
+  .grid { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px }
+  .grid > div { flex:1; min-width:220px }
+  label { color:var(--sub); font-size:12.5px }
+  input[type=text], input[type=number] { width:100%; margin-top:5px; padding:8px 10px; font:13px var(--mono);
+        background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px }
+  input:focus { outline:2px solid rgba(88,166,255,.5); border-color:transparent }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin-top:6px }
+  td { padding:5px 8px; border-bottom:1px solid #1d2634; vertical-align:top }
+  td:first-child { color:var(--sub); white-space:nowrap; width:120px }
+  pre { background:#0b0f14; border:1px solid var(--line); border-radius:10px; padding:12px; font:12.5px/1.5 var(--mono);
+        max-height:340px; overflow:auto; white-space:pre-wrap; word-break:break-all }
+  .btn { display:inline-block; padding:10px 18px; border-radius:9px; border:1px solid var(--acc); background:rgba(76,141,255,.14);
+         color:#cfe0ff; font-size:14px; cursor:pointer }
+  .btn:hover { background:rgba(76,141,255,.22) }
+  .btn[disabled] { opacity:.5; cursor:default }
+  .btn.ghost { border-color:var(--line); background:transparent; color:var(--sub) }
+  .ok { color:#4ddba6 } .warn { color:#e3b341 } .bad { color:#f0616d }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--sub) }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px }
+  .hide { display:none }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>QQ 机器人安装向导</h1>
+  <div class="sub">选好之后点「开始安装」。这台机器的情况我已经先看过了（下面那张表）。</div>
+
+  <div class="card">
+    <h2>机器体检 <span class="pill" id="detect-state">读取中…</span></h2>
+    <table id="health"><tr><td>加载中</td><td></td></tr></table>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">1</span>QQ 怎么接</h2>
+    <div class="opt" data-mode="napcat"><input type="radio" name="mode" value="napcat">
+      <div><b>自带协议端容器（推荐）</b><div class="sub">下载 NapCat 镜像（约 1.4GB），要扫码登录一次。没有现成协议端就选它。</div></div></div>
+    <div class="opt" data-mode="reuse"><input type="radio" name="mode" value="reuse">
+      <div><b>复用本机已有的协议端</b><div class="sub">不下载镜像；桥接在你的协议端连过来（ws://127.0.0.1:6700）就能用。</div></div></div>
+    <div class="opt" data-mode="none"><input type="radio" name="mode" value="none">
+      <div><b>先不接 QQ</b><div class="sub">只起 DSH 宿主 + 控制台，之后你想接再接。不下载镜像、不用填 QQ 号。</div></div></div>
+    <div class="grid" id="qqrow">
+      <div><label>机器人登录用的 QQ 号</label><input type="text" id="qq" placeholder="纯数字"></div>
+    </div>
+    <div class="sub" id="qqhint" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">2</span>端口</h2>
+    <div class="grid">
+      <div><label>DSH 宿主端口</label><input type="number" id="portDsh"></div>
+      <div><label>控制台端口</label><input type="number" id="portConsole"></div>
+    </div>
+    <div class="sub" id="porthint" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">3</span>数据放哪</h2>
+    <div class="grid">
+      <div><label>数据根（会话/配置/登录态）</label><input type="text" id="dataRoot"></div>
+      <div><label>工作区（助手写代码的地方）</label><input type="text" id="workspace"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">4</span>其他</h2>
+    <div class="grid">
+      <div><label>上游代理（留空=用检测到的；填 off=强制直连）</label><input type="text" id="proxy"></div>
+      <div><label>时区</label><input type="text" id="tz" value="Asia/Shanghai"></div>
+    </div>
+    <label style="display:block;margin-top:12px"><input type="checkbox" id="dev"> 开发者模式：源码可写 + 容器里能用 docker（代价：容器相当于宿主 root，只在信任的机器上开）</label>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">5</span>确认</h2>
+    <div class="sub">将执行的命令：</div>
+    <pre id="cmd"></pre>
+    <div class="row">
+      <button class="btn" id="go">开始安装</button>
+      <span class="sub" id="gohint">安装过程会实时显示在下面</span>
+    </div>
+  </div>
+
+  <div class="card hide" id="logcard">
+    <h2>安装日志 <span class="pill" id="logstate">进行中</span></h2>
+    <pre id="log"></pre>
+    <div class="row"><a class="btn hide" id="toSetup" href="#" target="_blank">打开网页向导（设密码 → 白名单 → 扫码）</a></div>
+  </div>
+</div>
+
+<script>
+const TOKEN = '__TOKEN__';
+const S = { state:null };
+const q = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, body) {
+  const sep = path.includes('?') ? '&' : '?';
+  const url = path + sep + 't=' + encodeURIComponent(TOKEN);
+  const r = await fetch(url, body === undefined ? undefined : { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+  return r.json().catch(() => ({}));
+}
+
+function renderHealth(d) {
+  const rows = [];
+  const sys = d.system || {}, ports = d.ports || {}, qq = d.qq || {}, ob = d.onebot || {}, lg = d.legacy || {}, ex = d.extras || {};
+  rows.push(['系统', `${esc(sys.os)} · ${esc(sys.arch)} · Docker ${esc(sys.docker)} · Compose ${esc(sys.compose)}`]);
+  rows.push(['资源', `内存可用 ${esc(sys.memAvailGb)}GB · 目标盘可用 ${esc(sys.diskFree)}`]);
+  rows.push(['端口占用', `DSH 3081 ${ports.inUse?.dsh ? '<span class="warn">被占</span>' : '<span class="ok">空</span>'}（${esc(ports.owner?.dsh || '-')}）· 控制台 8798 ${ports.inUse?.console ? '<span class="warn">被占</span>' : '<span class="ok">空</span>'} · 桥接 6700 ${ports.inUse?.bridge ? '<span class="warn">被占</span>' : '<span class="ok">空</span>'}`]);
+  rows.push(['协议端号', `${(qq.protocolAccounts||[]).join(' ') || '<span class="sub">没检测到</span>'}${qq.napcatConfigAccount ? '（配置里记着 ' + esc(qq.napcatConfigAccount) + '）' : ''}`]);
+  if (qq.desktopAccount) rows.push(['桌面 QQ', `${esc(qq.desktopAccount)} <span class="sub">（只是提示：同号会和机器人互相踢下线）</span>`]);
+  rows.push(['已有协议端', ob.napcatContainer ? `napcat 容器在跑（${esc(ob.napcatContainer)}）→ 可以复用` : (ob.other || '<span class="sub">没有</span>')]);
+  if ((lg.units||[]).length) rows.push(['旧部署', `${lg.units.map(esc).join(' ')} <span class="sub">（和容器二选一，别同时跑）</span>`]);
+  rows.push(['选装', `git ${esc(ex.git || '未装')} · gh ${esc(ex.gh || '未装')} · 代理 ${esc(ex.proxy || '没配')} ${ex.proxyState ? '（' + esc(ex.proxyState) + '）' : ''}`]);
+  q('#health').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  q('#detect-state').textContent = '已读取';
+}
+
+function buildCmd() {
+  const args = ['bash install.sh', '--yes', '--mode', mode(), '--ports', `${q('#portDsh').value},${q('#portConsole').value}`];
+  if (q('#dataRoot').value.trim()) args.push('--data-root', q('#dataRoot').value.trim());
+  if (q('#workspace').value.trim()) args.push('--workspace', q('#workspace').value.trim());
+  if (q('#proxy').value.trim()) args.push('--proxy', q('#proxy').value.trim());
+  if (q('#tz').value.trim()) args.push('--tz', q('#tz').value.trim());
+  if (q('#dev').checked) args.push('--dev');
+  return args.join(' ');
+}
+const mode = () => (document.querySelector('input[name=mode]:checked')?.value || 'napcat');
+
+function syncMode() {
+  const m = mode();
+  document.querySelectorAll('.opt').forEach((el) => el.classList.toggle('sel', el.dataset.mode === m));
+  q('#qqrow').style.display = m === 'napcat' ? 'flex' : 'none';
+  q('#qqhint').textContent = m === 'napcat' ? '' : (m === 'reuse' ? '复用模式：不下载 NapCat 镜像，只需要 6700 空着给桥接听。' : '不接 QQ：装完你可以在控制台里随时接。');
+  q('#cmd').textContent = buildCmd();
+}
+
+async function load() {
+  const d = await api('/api/state');
+  S.state = d;
+  renderHealth(d);
+  const ports = d.ports || {}, qq = d.qq || {}, def = d.defaults || {};
+  q('#portDsh').value = ports.dsh ?? 3081;
+  q('#portConsole').value = ports.console ?? 8798;
+  q('#dataRoot').value = def.dataRoot || '';
+  q('#workspace').value = def.workspace || '';
+  q('#proxy').value = (d.extras || {}).proxy || '';
+  q('#qq').value = (qq.protocolAccounts || [])[0] || qq.envAccount || '';
+  const want = def.mode || 'napcat';
+  const radio = document.querySelector(`input[name=mode][value="${want}"]`) || document.querySelector('input[name=mode][value=napcat]');
+  radio.checked = true;
+  const hints = [];
+  if (ports.inUse?.dsh) hints.push(`3081 被占（${ports.owner?.dsh || '别的程序'}），已改成 ${ports.dsh}`);
+  if (ports.inUse?.console) hints.push(`8798 被占，已改成 ${ports.console}`);
+  if (ports.inUse?.bridge) hints.push('6700 被占：只有你要复用已有协议端时才正常；否则先把它腾出来');
+  q('#porthint').innerHTML = hints.map(esc).join(' ｜ ') || '端口都空着，直接用默认值。';
+  syncMode();
+}
+
+document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncMode));
+['#portDsh','#portConsole','#dataRoot','#workspace','#proxy','#tz','#dev'].forEach((sel) => {
+  q(sel).addEventListener('input', () => { q('#cmd').textContent = buildCmd(); });
+});
+document.querySelectorAll('.opt').forEach((el) => el.addEventListener('click', () => {
+  const r = el.querySelector('input[type=radio]'); if (r) { r.checked = true; syncMode(); }
+}));
+
+q('#go').onclick = async () => {
+  if (mode() === 'napcat' && !q('#qq').value.trim()) {
+    alert('选了自带协议端，就要填一个机器人登录用的 QQ 号（纯数字）。');
+    return;
+  }
+  q('#go').disabled = true;
+  q('#gohint').textContent = '正在启动安装…';
+  const body = {
+    mode: mode(),
+    ports: `${q('#portDsh').value},${q('#portConsole').value}`,
+    dataRoot: q('#dataRoot').value, workspace: q('#workspace').value,
+    proxy: q('#proxy').value, tz: q('#tz').value, dev: q('#dev').checked,
+  };
+  if (mode() === 'napcat') body.qq = q('#qq').value.trim();
+  const r = await api('/api/install', body);
+  if (!r.ok) { q('#go').disabled = false; q('#gohint').textContent = r.error || '启动失败'; return; }
+  q('#logcard').classList.remove('hide');
+  q('#gohint').textContent = '安装中，看下面的日志';
+  poll(0);
+};
+
+let offset = 0;
+async function poll(from) {
+  const r = await api('/api/log?offset=' + from);
+  if (r.text) { q('#log').textContent += r.text; q('#log').scrollTop = q('#log').scrollHeight; }
+  offset = r.offset ?? from;
+  if (r.running) { setTimeout(() => poll(offset), 900); return; }
+  const okDone = r.exitCode === 0;
+  q('#logstate').textContent = okDone ? '装好了 ✓' : `结束（退出码 ${r.exitCode}）`;
+  q('#logstate').className = 'pill ' + (okDone ? 'ok' : 'bad');
+  q('#gohint').textContent = okDone ? '接下来去网页向导做收尾配置' : '看日志里的报错；改完可以刷新页面重试';
+  const port = q('#portConsole').value || 8798;
+  const a = q('#toSetup');
+  a.href = `http://127.0.0.1:${port}/setup`;
+  a.classList.remove('hide');
+  a.textContent = `打开网页向导 http://127.0.0.1:${port}/setup`;
+}
+
+load();
+</script>
+</body>
+</html>

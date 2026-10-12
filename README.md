@@ -22,8 +22,9 @@ bash install.sh            # 一键：先体检机器，只问一句"机器人�
 
 装完它会打印一个网页向导地址（`http://127.0.0.1:8798/setup`），密码、白名单、扫码在网页上点完。
 
-- Windows：**双击 `install.cmd`**（走 WSL）·  macOS：**双击 `install.command`**
-- 想每一步自己选：`bash install.sh --custom`
+- Windows：**双击 `install.cmd`** · macOS：**双击 `install.command`**
+  → 会在浏览器里打开"安装向导"页面：左边是这台机器的体检表，右边点选你要什么，点「开始安装」看日志
+- Linux：想每一步自己选就用 `bash install.sh --custom`（命令行向导），要页面版就 `bash install.sh --wizard`
 - 只想看看这台机器现在什么情况：`bash install.sh --check`（什么都不改）
 
 （不需要手动 `cp .env.example .env`，脚本会自己生成并填好。）
@@ -152,11 +153,27 @@ bash install.sh            # 一键：先体检机器，只问一句"机器人�
 
 ## Windows / macOS（Docker Desktop）
 
-镜像是同一批（amd64 / arm64 都有），入口是双击：
+镜像是同一批（amd64 / arm64 都有），入口就是"双击"：
 
-- **Windows**：双击 `install.cmd`（通过 WSL 跑，需要 Docker Desktop 的 WSL integration；
-  也支持 `install.cmd --custom`）
+- **Windows**：双击 `install.cmd`（通过 WSL 跑，需要 Docker Desktop 的 WSL integration）
 - **macOS**：双击 `install.command`（首次可能要右键 → 打开）
+
+双击之后会在浏览器里打开**安装向导**（`http://127.0.0.1:8790` 附近，页面里会显示地址）：
+
+| 页面上的部分 | 内容 |
+|---|---|
+| 机器体检 | 系统 / 资源 / 端口占用（连占用者是谁）/ 检测到的 QQ 号 / 已有协议端 / 旧部署 / git·gh·代理 |
+| ① QQ 怎么接 | 自带协议端容器（默认）· 复用本机已有的 · 先不接 |
+| ② 端口 | 预填自动挑好的空闲端口，可改 |
+| ③ 数据放哪 | 数据根 / 工作区 |
+| ④ 其他 | 代理、时区、开发者模式（带代价说明） |
+| ⑤ 确认 | 显示将要执行的命令 → 「开始安装」→ 实时日志 → 装完给「打开网页向导」的按钮 |
+
+向导只是个页面，真正干活的是 `install.sh`（页面把选择拼成 `install.sh --yes ...` 再跑），
+所以**页面版和命令行版行为完全一致**，出问题也能直接看日志重跑。
+
+没有 python3 的机器（少数精简发行版）会自动退回命令行向导：`bash install.sh --custom`。
+远程服务器上想用页面版也可以：`bash install.sh --wizard --bind 0.0.0.0`（注意：那等于把这个页面暴露到局域网）。
 
 网络两条路，选一条：
 
@@ -177,6 +194,8 @@ arm64（Apple Silicon / ARM Windows）不需要模拟，但 QQ 官方 Linux 客�
 
 ```bash
 bash install.sh --check                       # 只体检
+bash install.sh --json                        # 体检结果 JSON（给向导/自动化）
+bash install.sh --wizard                      # 浏览器版选择向导（本机 8790 起页面）
 bash install.sh --dry-run                     # 体检 + 生成 .env，不起栈
 bash install.sh --yes --mode napcat --qq 123456 --ports 3081,8798
 bash install.sh --mode reuse                  # 复用本机已有协议端（不拉 NapCat 镜像）

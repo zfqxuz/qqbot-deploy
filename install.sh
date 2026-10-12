@@ -19,6 +19,7 @@
 #   --legacy-compat             从 systemd 老部署迁移（老配置里的绝对路径继续有效）
 #   --repair                    按当前正在跑的 compose 组合原地重建（不动数据）
 #   --dry-run                   体检 + 生成 .env，不起栈
+#   --wizard                    浏览器版选择向导（Windows/mac 双击入口走这条；需要 python3）
 #   -h / --help                 显示这段
 #
 # 脚本负责"装完就能用"：docker 组、工作区可写、目录、镜像、起栈、等就绪，
@@ -29,11 +30,15 @@ HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 # ---------- 参数 ----------
 MODE_ARG=''; QQ_ARG=''; PORTS_ARG=''; ROOT_ARG=''; WS_ARG=''; PROXY_ARG=''
 TZ_ARG=''; CUSTOM=0; YES=0; CHECK=0; DRY=0; DESKTOP=0; LEGACY=0; DEV=''; REPAIR=0
+JSON=0; WIZARD=0; BIND='127.0.0.1'
 while [ $# -gt 0 ]; do
   case "$1" in
     --custom) CUSTOM=1; shift ;;
     --yes|-y) YES=1; shift ;;
     --check) CHECK=1; shift ;;
+    --json) JSON=1; CHECK=1; shift ;;
+    --wizard) WIZARD=1; shift ;;
+    --bind) BIND=${2:-127.0.0.1}; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --qq) QQ_ARG=${2:-}; shift 2 ;;
     --mode) MODE_ARG=${2:-}; shift 2 ;;
@@ -89,6 +94,9 @@ ask_choice() { # ask_choice "标题" 默认序号 "选项1" "选项2" ...
     *) if [ "$ans" -ge 1 ] && [ "$ans" -le "$n" ]; then printf '%s' "$ans"; else printf '%s' "$def"; fi ;;
   esac
 }
+
+# JSON 模式（给向导/自动化用）：stdout 只留 JSON，其他输出一律走 stderr
+if [ "$JSON" = 1 ]; then exec 3>&1 1>&2; fi
 
 cat <<'BANNER'
 ============================================================
@@ -192,10 +200,48 @@ printf '  %-14s %s\n' "旧部署" "${LEGACY_UNITS:-没有}${LEGACY_UNITS:+ （sy
 printf '  %-14s %s\n' "选装" "git ${GIT_V:-未装} · gh ${GH_STATE:-未装} · 代理 ${PROXY_FOUND:-没配}${PROXY_STATE:+（$PROXY_STATE）}"
 echo "============================================================"
 
+if [ "$JSON" = 1 ]; then
+  _def_mode=napcat
+  { [ -n "$NAPCAT_CONTAINER" ] || [ -n "$ONEBOT_ELSEWHERE" ]; } && _def_mode=reuse
+  jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  jlist() { local out='' x; for x in $1; do out="${out}\"$(jstr "$x")\","; done; printf '%s' "${out%,}"; }
+  cat <<JSONOUT >&3
+{
+  "ok": true,
+  "system": { "os": "$(jstr "$OS_KIND")", "arch": "$(jstr "$ARCH")", "docker": "$(jstr "$DOCKER_V")", "compose": "$(jstr "$COMPOSE_V")",
+              "memTotalGb": "$(jstr "$MEM_TOTAL")", "memAvailGb": "$(jstr "$MEM_AVAIL")", "diskFree": "$(jstr "${SPACE_FREE:-?}")" },
+  "ports": { "dsh": $PORT_DSH, "console": $PORT_CONSOLE, "bridge": 6700, "napcatWebui": 6099,
+             "inUse": { "dsh": $(port_in_use 3081 && echo true || echo false), "console": $(port_in_use 8798 && echo true || echo false),
+                        "bridge": $([ "$BRIDGE_BUSY" = 1 ] && echo true || echo false), "napcatWebui": $(port_in_use 6099 && echo true || echo false) },
+             "owner": { "dsh": "$(jstr "$(port_in_use 3081 && port_owner 3081 || true)")", "console": "$(jstr "$(port_in_use 8798 && port_owner 8798 || true)")",
+                        "bridge": "$(jstr "$([ "$BRIDGE_BUSY" = 1 ] && port_owner 6700 || true)")" } },
+  "qq": { "protocolAccounts": [$(jlist "$QQ_FROM_PROTOCOL")], "envAccount": "$(jstr "$QQ_FROM_ENV")",
+          "napcatConfigAccount": "$(jstr "$QQ_FROM_NAPCAT_CFG")", "desktopAccount": "$(jstr "$QQ_FROM_DESKTOP")" },
+  "onebot": { "napcatContainer": "$(jstr "$NAPCAT_CONTAINER")", "other": "$(jstr "$ONEBOT_ELSEWHERE")" },
+  "legacy": { "units": [$(jlist "$LEGACY_UNITS")] },
+  "extras": { "git": "$(jstr "$GIT_V")", "gh": "$(jstr "$GH_STATE")", "proxy": "$(jstr "$PROXY_FOUND")", "proxyState": "$(jstr "$PROXY_STATE")" },
+  "defaults": { "mode": "$_def_mode", "dataRoot": "$(jstr "$HOME/qqbot")", "workspace": "$(jstr "$HOME/qqbot/workspace")",
+                "dev": false, "tz": "Asia/Shanghai" }
+}
+JSONOUT
+  exit 0
+fi
+
 if [ "$CHECK" = 1 ]; then
   echo
   log "只体检（--check）：什么都没改。想装就 bash install.sh（一键）或 bash install.sh --custom（向导）。"
   exit 0
+fi
+
+# ---------- 1.5 浏览器版向导（--wizard）----------
+if [ "$WIZARD" = 1 ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "这台机器没有 python3，浏览器版向导起不来。用命令行向导："
+    echo "    bash install.sh --custom"
+    exit 2
+  fi
+  log "启动浏览器版安装向导…"
+  exec python3 "$HERE/install-wizard.py" --bind "$BIND" --installer "$HERE/install.sh" $( [ "$DESKTOP" = 1 ] && echo --desktop ) $( [ "$LEGACY" = 1 ] && echo --legacy-compat )
 fi
 
 # ---------- 2. 选择 ----------
