@@ -48,7 +48,7 @@ services:
 
   harness:
     # 镜像从哪来：本地 ./build.sh 构建（默认 qqbot-harness:<tag>）或 .env 指向的仓库
-    image: ${QQ_HARNESS_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-harness:${QQ_TAG:-v0.7.2}}
+    image: ${QQ_HARNESS_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-harness:${QQ_TAG:-v0.7.3}}
     container_name: qqbot-harness
     working_dir: ${QQ_WORKSPACE:?}          # 新会话落在这个工作区里（entrypoint 还会按系统配置校正）
     # 以宿主用户身份跑：数据卷里的文件属主与宿主一致，用户不用 sudo 就能改自己的配置
@@ -75,6 +75,14 @@ services:
       DSH_PORT: ${QQ_DSH_PORT:-3081}
       QQ_WORKSPACE: ${QQ_WORKSPACE:?请在 .env 设置 QQ_WORKSPACE（工作区目录）}
       QQ_WORKSPACE_ROOT: ${QQ_WORKSPACE_ROOT:-}
+      # [托管权] 容器身份 + 待机复查间隔（SPEC §3 L1/L3.5）：宿主 dsh 在跑时不启动 harness
+      QQ_HARNESS_KIND: container
+      QQ_TAKEOVER_T1_SECONDS: ${QQ_TAKEOVER_T1_SECONDS:-90}
+      QQ_TAKEOVER_T2_SECONDS: ${QQ_TAKEOVER_T2_SECONDS:-30}      # 宿主回来确认多久才交回
+      QQ_MIN_HOLD_SECONDS: ${QQ_MIN_HOLD_SECONDS:-120}          # 交回后多久内不再抢
+      QQ_SWITCHES_PER_HOUR: ${QQ_SWITCHES_PER_HOUR:-3}          # 每小时切换上限（超了停在待机并告警）
+      QQ_HARNESS_POLL_SECONDS: ${QQ_HARNESS_POLL_SECONDS:-5}    # 名册/探测轮询间隔
+      QQ_DRAIN_SECONDS: ${QQ_DRAIN_SECONDS:-60}                 # 交回时等在飞回合的上限
       QQ_ACCOUNT: ${QQ_ACCOUNT:-}
       QQ_VERSION: ${QQ_TAG:-v1}
       UPSTREAM_PROXY: ${UPSTREAM_PROXY:-}
@@ -88,7 +96,7 @@ services:
       - ${QQ_WORKSPACE_ROOT:?请在 .env 设置 QQ_WORKSPACE_ROOT（跑一次 install.sh 会自动填）}:${QQ_WORKSPACE_ROOT:?}
 
   console:
-    image: ${QQ_CONSOLE_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-console:${QQ_TAG:-v0.7.2}}
+    image: ${QQ_CONSOLE_IMAGE:-crpi-nqwu6u57qjindq7p.cn-hangzhou.personal.cr.aliyuncs.com/zfqxuz/qqbot-console:${QQ_TAG:-v0.7.3}}
     container_name: qqbot-console
     user: "${QQ_UID:-1000}:${QQ_GID:-1000}"
     group_add:

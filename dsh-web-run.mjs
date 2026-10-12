@@ -33,19 +33,20 @@
  *
  * 登记文件写入是"临时文件 + rename"，控制台不会读到半截；文件权限 0600（里面有 token）。
  */
-import { spawn } from 'node:child_process'
-import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const HELP = `用法：node dsh-web-run.mjs --port <端口> --data-root <数据根> [--no-log] -- <命令…>
 
 不写 <命令…> 时默认起：dsh web --no-open --port <端口>
+[--harness-owner <qq-harness-owner.mjs>] 起 dsh 前先登记宿主心跳（托管权，见 SPEC §3 L1），退出时移除。
 它会顺带把真实地址登记到 <数据根>/state/dsh-web-url.txt 并追加 <数据根>/logs/dsh-web.log。`
 
 const URL_RE = /https?:\/\/[^\s"'`]+?:(\d+)\/\?token=([A-Za-z0-9._~-]+)/
 
 function parseArgv(argv) {
-  const opts = { port: null, dataRoot: '', log: true }
+  const opts = { port: null, dataRoot: '', log: true, harnessOwner: '' }
   let i = 0
   for (; i < argv.length; i++) {
     const a = argv[i]
@@ -54,6 +55,7 @@ function parseArgv(argv) {
     if (a === '--port') { opts.port = Number(argv[++i]); continue }
     if (a === '--data-root') { opts.dataRoot = String(argv[++i] ?? ''); continue }
     if (a === '--no-log') { opts.log = false; continue }
+    if (a === '--harness-owner') { opts.harnessOwner = String(argv[++i] ?? ''); continue }
     console.error(`[dsh-web-run] 未知参数：${a}\n\n${HELP}`)
     process.exit(2)
   }
@@ -68,6 +70,25 @@ const dataRoot = opts.dataRoot || process.env.QQ_DATA_ROOT || process.cwd()
 const stateFile = join(dataRoot, 'state', 'dsh-web-url.txt')
 const logFile = join(dataRoot, 'logs', 'dsh-web.log')
 const command = cmd.length > 0 ? cmd : ['dsh', 'web', '--no-open', '--port', String(port)]
+
+// [托管权] 宿主优先（SPEC §3 L1）：起 dsh 之前先在共享名册里占位，避免同机容器 harness
+// 在这个启动窗口里把 home 抢走；dsh 里的插件会接续写自己的心跳，本进程退出时移除这一条。
+const OWNER_INSTANCE = `host-launcher-${process.pid}`
+const ownerCli = (() => {
+  const candidates = [opts.harnessOwner, process.env.QQ_HARNESS_OWNER_CLI, process.env.QQ_BRIDGE_DIR ? join(process.env.QQ_BRIDGE_DIR, 'control', 'bin', 'qq-harness-owner.mjs') : '', join(process.env.HOME || '', 'qqbot', 'src', 'dsh-qq-onebot-bridge', 'control', 'bin', 'qq-harness-owner.mjs')]
+  return candidates.map((item) => String(item ?? '')).find((item) => item !== '' && existsSync(item)) ?? ''
+})()
+function ownerAction(action) {
+  if (ownerCli === '') return
+  try {
+    const result = spawnSync(process.execPath, [ownerCli, '--kind', 'host', `--${action}`, '--instance', OWNER_INSTANCE, '--port', String(port)], { encoding: 'utf8', timeout: 10_000 })
+    const line = String(result.stdout ?? '').trim().split('\n').pop() ?? ''
+    if (line !== '') console.log(`[dsh-web-run] 托管权${action === 'claim' ? '登记' : '释放'}：${line}`)
+  } catch (error) {
+    console.error(`[dsh-web-run] 托管权${action} 失败（不影响启动）：${error.message}`)
+  }
+}
+ownerAction('claim')
 
 const LOG_MAX = 8 * 1024 * 1024 // 超过就轮转一份 .1，避免长跑把盘写满
 
@@ -148,7 +169,10 @@ for (const sig of Object.keys(SIGNALS)) {
     setTimeout(() => { try { child.kill('SIGKILL') } catch { /* 已经退了 */ } }, 3000).unref()
   })
 }
-process.on('exit', () => { if (!stopping) { try { child.kill('SIGTERM') } catch { /* 已经退了 */ } } })
+process.on('exit', () => {
+  ownerAction('release')
+  if (!stopping) { try { child.kill('SIGTERM') } catch { /* 已经退了 */ } }
+})
 
 child.on('exit', (code, signal) => {
   stopping = true
