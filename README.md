@@ -283,6 +283,9 @@ bash install.sh --legacy-compat               # 从 systemd 老部署迁移
 ## 版本
 
 - 当前：`QQ_TAG=v0.7.4`
+  - 路径变量改名（只动 .env）：卷的宿主机侧改用 **QQ_HOST_DATA_ROOT / QQ_HOST_DSH_HOME**——
+    QQ_DATA_ROOT / QQ_DSH_HOME 在容器里是同名的 /data/... 变量，在容器里跑一次 docker compose up
+    就会把数据根挂成空目录（2026-10-12 真机踩过）。老 .env：把两个值各抄一份，或重跑 ./install.sh
   - 修：接管外壳把自己起的 harness 当成竞争者（容器版每两分钟断一次）——v0.7.4 起 supervisor 认得出自己起的实例
   - 会话写权不再互相踢：宿主与容器共用一份 DSH home 时，冲突消息**收下、排队、拿到锁后按序补跑**；
     托管权心跳选主（host > desktop > container），宿主 dsh 在跑时容器自动待机，宿主退出后接管

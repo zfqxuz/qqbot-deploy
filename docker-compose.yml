@@ -7,11 +7,18 @@
 #   - harness 的代理由 entrypoint 守卫决定：探活可用就带代理启动、不可用就直连，
 #     运行期翻转则退出让 compose 重启后重新决策。
 #
-# 路径策略：本文件不含任何宿主绝对路径，全部来自 .env：
-#   QQ_DATA_ROOT        桥接数据/日志/状态/配置（容器内固定挂到 /data/qqbot）
-#   QQ_DSH_HOME         DSH home（profile、插件、会话、凭据；容器内挂到 /data/dsh）
+# 路径策略：本文件不含任何宿主绝对路径，全部来自 .env。
+#   ⚠ 卷的**左边**（宿主机侧）一律用 QQ_HOST_* 这个名字，**不要**用 QQ_DATA_ROOT / QQ_DSH_HOME：
+#     后两个名字在容器里也是同名的环境变量（镜像 ENV 与 compose environment 都是 /data/...），
+#     而 compose 的变量优先级是"shell 环境 > .env"，所以一旦你在 harness/console 容器里跑
+#     docker compose up，卷的宿主机侧就会变成容器内路径 /data/qqbot，挂出一个空目录
+#     （2026-10-12 真机踩过：桥的数据根被挂成空目录、控制台起不来）。改名后这个坑不存在了。
+#   QQ_HOST_DATA_ROOT  宿主机上的桥接数据根（容器内固定挂到 /data/qqbot）
+#   QQ_HOST_DSH_HOME   宿主机上的 DSH home（profile、插件、会话、凭据；容器内挂到 /data/dsh）
+#   QQ_DATA_ROOT       同一个数据根，留给 backup/restore/uninstall 这类脚本与宿主模式读
+#   QQ_DSH_HOME        同上（容器内环境变量名也是它，值固定 /data/dsh）
 #   QQ_WORKSPACE        DSH 的工作区（容器内 working_dir；必须在 QQ_WORKSPACE_ROOT 之下）
-#   QQ_WORKSPACE_ROOT   工作区根：整棵按原路径挂进容器且**可写**。
+#   QQ_WORKSPACE_ROOT   工作区根：整棵按原路径挂进容器且**可写**（两边路径相同，同名无妨）。
 #                       它决定控制台「系统配置」里能把工作区绑到哪个范围 —— 装完就能改，
 #                       不需要再手工改 .env / 重建命令（默认 = QQ_WORKSPACE 的父目录）
 #   QQ_DOCKER_GID       /var/run/docker.sock 的属组（install.sh 自动探测），
@@ -92,8 +99,8 @@ services:
       PROBE_TIMEOUT: ${PROBE_TIMEOUT:-4}
       NO_PROXY: 127.0.0.1,localhost,::1
     volumes:
-      - ${QQ_DATA_ROOT:?请在 .env 设置 QQ_DATA_ROOT}:/data/qqbot
-      - ${QQ_DSH_HOME:?请在 .env 设置 QQ_DSH_HOME}:/data/dsh
+      - ${QQ_HOST_DATA_ROOT:?.env 缺少 QQ_HOST_DATA_ROOT（宿主机上的数据根，例：/home/you/qqbot；把老 .env 里 QQ_DATA_ROOT 的值抄一份即可）}:/data/qqbot
+      - ${QQ_HOST_DSH_HOME:?.env 缺少 QQ_HOST_DSH_HOME（宿主机上的 DSH home，例：/home/you/.dsh；把老 .env 里 QQ_DSH_HOME 的值抄一份即可）}:/data/dsh
       # 工作区根：按原路径挂进来且可写。范围内的目录都能在控制台里绑定，装完即用。
       - ${QQ_WORKSPACE_ROOT:?请在 .env 设置 QQ_WORKSPACE_ROOT（跑一次 install.sh 会自动填）}:${QQ_WORKSPACE_ROOT:?}
 
@@ -119,6 +126,6 @@ services:
       QQ_WORKSPACE: ${QQ_WORKSPACE:-}
       QQ_WORKSPACE_ROOT: ${QQ_WORKSPACE_ROOT:-}
     volumes:
-      - ${QQ_DATA_ROOT:?请在 .env 设置 QQ_DATA_ROOT}:/data/qqbot
-      - ${QQ_DSH_HOME:?请在 .env 设置 QQ_DSH_HOME}:/data/dsh
+      - ${QQ_HOST_DATA_ROOT:?.env 缺少 QQ_HOST_DATA_ROOT（宿主机上的数据根，例：/home/you/qqbot；把老 .env 里 QQ_DATA_ROOT 的值抄一份即可）}:/data/qqbot
+      - ${QQ_HOST_DSH_HOME:?.env 缺少 QQ_HOST_DSH_HOME（宿主机上的 DSH home，例：/home/you/.dsh；把老 .env 里 QQ_DSH_HOME 的值抄一份即可）}:/data/dsh
       - /var/run/docker.sock:/var/run/docker.sock:ro   # 只为显示容器状态；没有也能跑
