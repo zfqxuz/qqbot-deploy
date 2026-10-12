@@ -494,7 +494,7 @@ if [ "$DRY" = 1 ]; then
 fi
 
 # ---------- 6. 镜像 ----------
-TAG=$(env_get QQ_TAG); TAG=${TAG:-v0.7.4}
+TAG=$(env_get QQ_TAG); TAG=${TAG:-v0.7.5}
 HIMG=$(env_get QQ_HARNESS_IMAGE); HIMG=${HIMG:-qqbot-harness:$TAG}
 CIMG=$(env_get QQ_CONSOLE_IMAGE); CIMG=${CIMG:-qqbot-console:$TAG}
 NEED_PULL=0

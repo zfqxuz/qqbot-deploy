@@ -96,6 +96,7 @@ chinese.SetupAppRunningError=请先关闭正在运行的安装程序，然后点
 var
   QQPage: TInputQueryWizardPage;
   InstallLog: String;
+  LogHome: String;
   InstallRc: Integer;
   InstallTried: Boolean;
   ConsoleOpened: Boolean;
@@ -151,8 +152,15 @@ var
   Params, QQ: String;
   Rc: Integer;
 begin
-  InstallLog := ExpandConstant('{userprofile}\qqbot\install-gui-' +
-    GetDateTimeString('yyyymmdd-hhnnss', '-', ':') + '.txt');
+  { Inno 没有 {userprofile} 常量（2026-10-12 真机报 Unknown constant），
+    取环境变量要用 {%NAME}；另外 %USERPROFILE%\qqbot 在全新机器上还不存在，
+    不先建目录的话重定向会失败（安装脚本跑不起来）。 }
+  LogHome := ExpandConstant('{%USERPROFILE}');
+  if LogHome = '' then LogHome := ExpandConstant('{%TEMP}');
+  LogHome := LogHome + '\qqbot';
+  ForceDirectories(LogHome);
+  InstallLog := LogHome + '\install-gui-' +
+    GetDateTimeString('yyyymmdd-hhnnss', '-', ':') + '.txt';
   QQ := Trim(QQPage.Values[0]);
   Params := '-NoProfile -ExecutionPolicy Bypass -Command "& ' +
     Q(ExpandConstant('{app}\host\install-host.ps1')) + ' -NoPause';

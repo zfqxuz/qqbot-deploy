@@ -282,7 +282,8 @@ bash install.sh --legacy-compat               # 从 systemd 老部署迁移
 
 ## 版本
 
-- 当前：`QQ_TAG=v0.7.4`
+- 当前：`QQ_TAG=v0.7.5`
+  - Windows：装 `qqbot-deploy-<版本>-setup.exe` 双击就完事——向导里等装完、完成页给结果、自动打开控制台
   - 路径变量改名（只动 .env）：卷的宿主机侧改用 **QQ_HOST_DATA_ROOT / QQ_HOST_DSH_HOME**——
     QQ_DATA_ROOT / QQ_DSH_HOME 在容器里是同名的 /data/... 变量，在容器里跑一次 docker compose up
     就会把数据根挂成空目录（2026-10-12 真机踩过）。老 .env：把两个值各抄一份，或重跑 ./install.sh
