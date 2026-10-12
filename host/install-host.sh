@@ -218,7 +218,7 @@ else
     ln -sfn "${src%/}" "$DSH_HOME/plugins/$name"; log "  插件链接 $name → ${src%/}"
   done
   ln -sfn "$BRIDGE_DIR" "$PROFILE/node_modules/dsh-qq-onebot-bridge"; log "  桥接链接 → $BRIDGE_DIR"
-  [ -f "$BRIDGE_DIR/control/bin/qq-seed.mjs" ] && run "首启播种（只补缺、不覆盖）" node "$BRIDGE_DIR/control/bin/qq-seed.mjs"
+  [ -f "$BRIDGE_DIR/control/bin/qq-seed.mjs" ] && run "首启播种（只补缺、不覆盖）" node "$BRIDGE_DIR/control/bin/qq-seed.mjs" --data-root "$ROOT"
 fi
 
 # ---------- 5. 环境文件 ----------

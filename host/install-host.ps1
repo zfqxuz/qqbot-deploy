@@ -359,7 +359,7 @@ Say '  桥接 junction 完成'
 
 # 5) 首启播种（只补缺、不覆盖）
 $seed = Join-Path $BridgeDir 'control\bin\qq-seed.mjs'
-if (Test-Path $seed) { Say '首启播种（只补缺、不覆盖已有配置）'; $null = Invoke-Native $nodePath @($seed) }
+if (Test-Path $seed) { Say '首启播种（只补缺、不覆盖已有配置）'; $null = Invoke-Native $nodePath @($seed, '--data-root', $DataRoot) }
 
 # 6) 环境变量（用户级，重开终端生效）
 Say '写用户环境变量'
@@ -415,10 +415,13 @@ cd /d "$Workspace"
   }
 
   # 立刻跑一次这两个任务，并等端口真的起来 —— 安装器就是等这里跑完才去开浏览器
+  # [fix 2026-10-12] 上限 90 → 180 秒：控制台第一次启动时如果权限库还没建好，它会先等桥接建库
+  #   （最多 120 秒，见 qq-acl-console.mjs）。90 秒会在慢机器上误判成失败。
   foreach ($tn in @('qqbot-dsh-web', 'qqbot-console')) { $null = Invoke-Native 'schtasks' @('/Run', '/TN', $tn) -Quiet }
-  Say '已触发启动，等端口就绪（最多 90 秒）…'
-  $deadline = (Get-Date).AddSeconds(90)
+  Say "已触发启动，等端口就绪（最多 180 秒）…"
+  $deadline = (Get-Date).AddSeconds(180)
   $ready = $false
+  $okDsh = $false; $okConsole = $false
   while ((Get-Date) -lt $deadline) {
     $okDsh = $false; $okConsole = $false
     try { $okDsh = (New-Object Net.Sockets.TcpClient).ConnectAsync('127.0.0.1', $Port).Wait(800) } catch { }
@@ -426,8 +429,19 @@ cd /d "$Workspace"
     if ($okDsh -and $okConsole) { $ready = $true; break }
     Start-Sleep -Milliseconds 1000
   }
-  if ($ready) { Say "宿主与控制台已就绪：http://127.0.0.1:$ConsolePort/" }
-  else { Warn "等了 90 秒还没就绪（$Port / $ConsolePort）：看计划任务 qqbot-dsh-web、qqbot-console 的输出；修完可重跑本脚本" }
+  if ($ready) {
+    Say "宿主与控制台已就绪：http://127.0.0.1:$ConsolePort/"
+  } else {
+    # [fix 2026-10-12] 没起来就**算失败**（退出码 1）：安装器完成页据此显示"失败 + 日志尾部"。
+    #   旧实现在这里只 Warn 然后 exit 0 —— 向导照样写"安装完成，控制台已打开"，用户点了是打不开的
+    #   （2026-10-12 真机踩到：8798 ERR_CONNECTION_REFUSED，向导却报成功）。
+    $aclDb = Join-Path $DataRoot 'configacl.db'
+    Warn ("宿主/控制台没起来：宿主 $Port = " + $(if ($okDsh) { '在' } else { '没在' }) + '，控制台 ' + $ConsolePort + ' = ' + $(if ($okConsole) { '在' } else { '没在' }))
+    Warn ("权限库 " + $aclDb + "：" + $(if (Test-Path $aclDb) { '存在' } else { '缺失' }))
+    Warn ("控制台启动器 " + (Join-Path $DataRoot 'start-console.cmd') + "：" + $(if (Test-Path (Join-Path $DataRoot 'start-console.cmd')) { '存在' } else { '缺失（拉源码那步可能没成功）' }))
+    Warn '手工跑一次控制台看具体报错（窗口会留着）：cmd /k "%USERPROFILE%qqbotstart-console.cmd"'
+    Die "装完了但服务没起来（$Port / $ConsolePort 连不上）：按上面几行排查；权限库缺失的话重跑本脚本会自动补"
+  }
 } else { Warn '按参数跳过自启' }
 
 Write-Host ''
