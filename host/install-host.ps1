@@ -24,12 +24,62 @@ param(
   [switch]$NoAutostart,
   [switch]$UpgradeDsh,
   [switch]$SkipDsh,
-  [string]$DshVersion = ''
+  [string]$DshVersion = '',
+  [switch]$NoPause     # 由别的脚本调用时加；双击/安装器启动时默认会停住等回车（避免报错一闪而过）
 )
 $ErrorActionPreference = 'Stop'
+
+# ---------- 0) 刷新 PATH + 记录日志（Windows 两个经典坑，2026-10-12 用户实测踩到）----------
+# 坑 1：安装器/快捷方式启动的进程可能拿着"旧的" PATH —— 刚装好的 Node/dsh 看不见，
+#       脚本就会说"没有 npm"然后退出，窗口一闪而过。这里从注册表重新拼一遍 PATH。
+$machPath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($machPath -or $userPath) { $env:Path = (@($machPath, $userPath) | Where-Object { $_ }) -join ';' }
+
+# 坑 2：双击运行时窗口关了就没法看报错。这里从头记 transcript，失败也留一份。
+$LogFile = ''
+try {
+  New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
+  $LogFile = Join-Path $DataRoot ('install-log-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.txt')
+  Start-Transcript -Path $LogFile -Force | Out-Null
+} catch { $LogFile = '' }
+
 function Say($m)  { Write-Host "[host] $m" }
 function Warn($m) { Write-Host "[host] ! $m" -ForegroundColor Yellow }
-function Die($m)  { Write-Host "[host] x $m" -ForegroundColor Red; exit 1 }
+function Stop-Log { if ($LogFile) { try { Stop-Transcript | Out-Null } catch { } } }
+function Pause-Here {
+  if ($NoPause) { return }
+  try { if ([Environment]::UserInteractive) { Write-Host ''; Read-Host '按回车关闭这个窗口' | Out-Null } } catch { }
+}
+function Die($m) {
+  Write-Host "[host] x $m" -ForegroundColor Red
+  if ($LogFile) { Write-Host "[host] 完整日志：$LogFile" }
+  Stop-Log
+  Pause-Here
+  exit 1
+}
+
+# ---------- 0.5) 找不到就找常见安装位置（PATH 没生效也能救）----------
+function Find-Exe([string]$name, [string[]]$extraDirs) {
+  $c = Get-Command $name -ErrorAction SilentlyContinue
+  if ($c) { return $c.Source }
+  $cands = @()
+  foreach ($d in $extraDirs) { if ($d) { $cands += (Join-Path $d $name); $cands += (Join-Path $d "$name.cmd"); $cands += (Join-Path $d "$name.exe") } }
+  foreach ($p in $cands) { if ($p -and (Test-Path $p)) { return $p } }
+  return $null
+}
+$nodeDirs = @(
+  (Join-Path $env:ProgramFiles 'nodejs'),
+  $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'nodejs' }),
+  (Join-Path $env:LOCALAPPDATA 'Programs
+odejs'),
+  (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
+  (Join-Path $env:APPDATA 'nvm\current')
+)
+$npmDirs = $nodeDirs + @((Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAPPDATA 'pnpm'))
+$foundExe = @((Find-Exe 'node' $nodeDirs), (Find-Exe 'npm' $npmDirs), (Find-Exe 'dsh' $npmDirs))
+$foundDirs = @($foundExe | Where-Object { $_ } | ForEach-Object { Split-Path -Parent $_ } | Select-Object -Unique)
+if ($foundDirs.Count -gt 0) { $env:Path = ($foundDirs -join ';') + ';' + $env:Path }
 
 $DshHome   = if ($env:DSH_HOME) { $env:DSH_HOME } else { "$env:USERPROFILE\.dsh" }
 $SrcDir    = Join-Path $DataRoot 'src'
@@ -57,7 +107,7 @@ Write-Host ("  数据根/工作区  : {0} / {1}" -f $DataRoot, $Workspace)
 $p6700 = (Get-NetTCPConnection -LocalPort 6700 -ErrorAction SilentlyContinue)
 Write-Host ("  6700 桥接端口  : {0}" -f $(if ($p6700) { '被占用（有协议端在跑？）' } else { '空' }))
 Write-Host '============================================================'
-if ($Check) { Say '只体检（-Check）：什么都没改'; exit 0 }
+if ($Check) { Say '只体检（-Check）：什么都没改'; if ($LogFile) { Say "本次日志：$LogFile" }; Stop-Log; Pause-Here; exit 0 }
 
 # 1) Node
 if (-not $nodeOk) {
@@ -189,5 +239,8 @@ Write-Host ('    (Invoke-WebRequest http://127.0.0.1:{0}/login).StatusCode   # �
 Write-Host '    Get-Process node | Select-Object Id,Path              # dsh / 控制台进程'
 Write-Host ''
 Write-Host '  回退：schtasks /Delete /TN qqbot-dsh-web /F'
+Stop-Log
+if ($LogFile) { Write-Host "[host] 本次日志：$LogFile" }
+Pause-Here
 Write-Host '        Remove-Item (Join-Path $DshHome ''plugins'') -Recurse -Force'
 Write-Host '============================================================'
