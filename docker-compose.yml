@@ -77,6 +77,8 @@ services:
       QQ_WORKSPACE_ROOT: ${QQ_WORKSPACE_ROOT:-}
       # [托管权] 容器身份 + 待机复查间隔（SPEC §3 L1/L3.5）：宿主 dsh 在跑时不启动 harness
       QQ_HARNESS_KIND: container
+      # auto=看名册选主（默认）；off=逃生开关，退回"直接起 harness"的老行为；container-only=无视宿主心跳
+      QQ_HARNESS_MODE: ${QQ_HARNESS_MODE:-auto}
       QQ_TAKEOVER_T1_SECONDS: ${QQ_TAKEOVER_T1_SECONDS:-90}
       QQ_TAKEOVER_T2_SECONDS: ${QQ_TAKEOVER_T2_SECONDS:-30}      # 宿主回来确认多久才交回
       QQ_MIN_HOLD_SECONDS: ${QQ_MIN_HOLD_SECONDS:-120}          # 交回后多久内不再抢
