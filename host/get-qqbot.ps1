@@ -28,7 +28,8 @@ param(
   [string]$Repo = 'zfqxuz/qqbot-deploy',
   [string]$Ref = 'main',
   [string]$Src = "$env:USERPROFILE\qqbot\src\qqbot-deploy",
-  [switch]$Refresh
+  [switch]$Refresh,
+  [switch]$NoPause
 )
 $ErrorActionPreference = 'Stop'
 function Say($m) { Write-Host "[get-qqbot] $m" }
@@ -45,6 +46,7 @@ function Invoke-Installer($root) {
   if ($UpgradeDsh) { $argv += '-UpgradeDsh' }
   if ($SkipDsh) { $argv += '-SkipDsh' }
   if ($DshVersion) { $argv += @('-DshVersion', $DshVersion) }
+  if ($NoPause) { $argv += '-NoPause' }
   Say "开始安装（$script）"
   & powershell -NoProfile -ExecutionPolicy Bypass -File $script @argv
   exit $LASTEXITCODE

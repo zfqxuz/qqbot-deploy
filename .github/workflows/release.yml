@@ -145,6 +145,15 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "packaging\windows\Output\*.exe" dist -Force
           Get-ChildItem dist | Format-Table Name, Length
+      - name: 真跑一次 -Check（只读；复现用户实际执行路径，抓运行时错误）
+        shell: powershell
+        run: |
+          Write-Host '--- 直接用仓库里的脚本 ---'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\host\install-host.ps1 -Check -NoPause
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { Write-Host "::error::install-host.ps1 -Check 退出码 $LASTEXITCODE"; exit 1 }
+          Write-Host '--- 再走一遍用户的一行安装（从已发布仓库取包）---'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/zfqxuz/qqbot-deploy/main/host/get-qqbot.ps1' -OutFile "$env:TEMP\get-qqbot.ps1"
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\get-qqbot.ps1" -Check -NoPause
       - name: 冒烟测试：静默装一遍再卸掉（抓"只有安装时才暴露"的错）
         shell: pwsh
         run: |
