@@ -90,8 +90,18 @@ Filename: "powershell.exe"; \
 Type: filesandordirs; Name: "{app}\build-context"
 
 [Messages]
-chinese.WelcomeLabel2=即将安装 %1。%n%n向导结束后会自动开始安装。
-chinese.FinishedLabel=安装完成。安装脚本已在新窗口运行，结束后按回车关闭。%n%n日志：%USERPROFILE%\qqbot\install-log-*.txt
+; 只留事实：装什么 / 装哪 / 进度 / 完成。解释性句子全部去掉（标准对话框的也覆盖掉）。
+chinese.WelcomeLabel1=安装 %1
+chinese.WelcomeLabel2=结束后自动开始安装。
+chinese.SelectDirLabel3=安装到：
+chinese.SelectDirBrowseLabel=
+chinese.ReadyLabel1=可以安装了。
+chinese.ReadyLabel2a=
+chinese.ReadyLabel2b=
+chinese.InstallingLabel=安装中…
+chinese.FinishedHeadingLabel=完成
+chinese.ClickFinish=
+chinese.SetupAppRunningError=请先关闭正在运行的安装程序，然后点"确定"重试。
 
 [Code]
 var
